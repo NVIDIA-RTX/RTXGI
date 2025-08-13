@@ -51,17 +51,17 @@ function(CheckAndDownloadPackage NAME VERSION LOCAL_PATH URL ARCHIVE_TYPE)
     endif()
 endfunction()
 
-CheckAndDownloadPackage("Agility SDK" "v1.610.4" ${CMAKE_CURRENT_SOURCE_DIR}/external/AgilitySDK https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.610.4 "zip")
-CheckAndDownloadPackage("DXC" "v1.7.2308" ${CMAKE_CURRENT_SOURCE_DIR}/external/dxc https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.7.2308/dxc_2023_08_14.zip "zip")
+CheckAndDownloadPackage("Agility SDK" "v1.610.4" ${CMAKE_CURRENT_SOURCE_DIR}/External/AgilitySDK https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.610.4 "zip")
+CheckAndDownloadPackage("DXC" "v1.7.2308" ${CMAKE_CURRENT_SOURCE_DIR}/External/dxc https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.7.2308/dxc_2023_08_14.zip "zip")
 
 # -----------------------------------------------------------------------------
 # Configure options
 # -----------------------------------------------------------------------------
 
 # Setup shader compiler 
-set(DXC_DXIL_EXECUTABLE "${CMAKE_CURRENT_SOURCE_DIR}/external/dxc/bin/x64/dxc.exe" CACHE STRING "DXC shader compiler path")
-set(DXC_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external/dxc/bin/x64/dxc.exe")
-set(DXC_SPIRV_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external/dxc/bin/x64/dxc.exe")
+set(DXC_DXIL_EXECUTABLE "${CMAKE_CURRENT_SOURCE_DIR}/External/dxc/bin/x64/dxc.exe" CACHE STRING "DXC shader compiler path")
+set(DXC_PATH "${CMAKE_CURRENT_SOURCE_DIR}/External/dxc/bin/x64/dxc.exe")
+set(DXC_SPIRV_PATH "${CMAKE_CURRENT_SOURCE_DIR}/External/dxc/bin/x64/dxc.exe")
 
 # Setup denoiser support (NRD)
 option(USE_RAY_TRACING_DENOISER "Include NRD as part of the sample." ON)
@@ -79,7 +79,7 @@ set(DONUT_SHADERS_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framewor
 
 
 # Setup option for local NRC library development
-set(CUSTOM_NRC_DISTRO_PATH "" CACHE PATH "Enter the path to NRC distro directory containing lib, include, and bin.")
+set(NRC_CUSTOM_DISTRO_PATH "" CACHE PATH "Enter the path to NRC distro directory containing lib, include, and bin.")
 
 # Options for NRC DLL signing verification
 option(NRC_ENABLE_DLL_CHECK "Enable NRC DLL signing verification." ON)
@@ -88,11 +88,11 @@ if(NRC_ENABLE_DLL_CHECK)
 endif()
 
 # Check if the custom directory path is provided.
-if(NOT CUSTOM_NRC_DISTRO_PATH)
+if(NOT NRC_CUSTOM_DISTRO_PATH)
     message(STATUS "Custom NRC distro path is not provided.")
     set(NRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Libraries/Nrc)
 else()
-    set(NRC_DIR ${CUSTOM_NRC_DISTRO_PATH})  
+    set(NRC_DIR ${NRC_CUSTOM_DISTRO_PATH})  
 endif()
 
 if(EXISTS ${NRC_DIR}/Bin/NRC_Vulkan.dll)
@@ -129,13 +129,13 @@ file(GLOB_RECURSE INCLUDE_NRC
     "${NRC_DIR}/include/*.h"
 )
 
-add_library(libraries ${INCLUDE_SHARC} ${INCLUDE_NRC})
-set_target_properties(libraries PROPERTIES LINKER_LANGUAGE CXX)
-set(VS_FOLDER_NAME "Libraries")
-set_target_properties(libraries PROPERTIES FOLDER ${VS_FOLDER_NAME})
+add_library(Libraries ${INCLUDE_SHARC} ${INCLUDE_NRC})
+set_target_properties(Libraries PROPERTIES LINKER_LANGUAGE CXX)
+set(VS_FOLDER_LIB_NAME "Libraries")
+set_target_properties(Libraries PROPERTIES FOLDER ${VS_FOLDER_LIB_NAME})
 
 source_group("Sharc" FILES ${INCLUDE_SHARC})
 source_group("Nrc"   FILES ${INCLUDE_NRC})
 
-# Include external
+# Include External
 add_subdirectory(External)

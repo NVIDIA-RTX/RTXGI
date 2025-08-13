@@ -206,6 +206,7 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
         nvrhi::BindingLayoutItem constantBufferItem = {};
         constantBufferItem.type = nvrhi::ResourceType::VolatileConstantBuffer;
         constantBufferItem.slot = instanceDesc.constantBufferRegisterIndex;
+        constantBufferItem.setSize(1);
         layoutDesc.bindings.push_back(constantBufferItem);
 
         assert(instanceDesc.samplersSpaceIndex == 0);
@@ -216,6 +217,7 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
             nvrhi::BindingLayoutItem samplerItem = {};
             samplerItem.type = nvrhi::ResourceType::Sampler;
             samplerItem.slot = instanceDesc.samplersBaseRegisterIndex + samplerIndex;
+            samplerItem.setSize(1);
             layoutDesc.bindings.push_back(samplerItem);
         }
 
@@ -240,6 +242,7 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
             for (uint32_t descriptorOffset = 0; descriptorOffset < nrdDescriptorRange.descriptorsNum; descriptorOffset++)
             {
                 resourceItem.slot = nrdDescriptorRange.baseRegisterIndex + descriptorOffset;
+                resourceItem.setSize(1);
                 layoutDesc.bindings.push_back(resourceItem);
             }
         }

@@ -159,8 +159,7 @@ private:
     class Pathtracer& m_app;
     UIData& m_ui;
 
-    ImFont* m_fontOpenSans = nullptr;
-    ImFont* m_fontDroidMono = nullptr;
+    std::shared_ptr<donut::app::RegisteredFont> m_fontDroidMono;
 
     std::shared_ptr<donut::engine::Light> m_selectedLight;
     int m_selectedLightIndex = 0;

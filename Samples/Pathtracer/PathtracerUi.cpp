@@ -47,10 +47,7 @@ PathtracerUI::PathtracerUI(DeviceManager* deviceManager, Pathtracer& app, UIData
     m_commandList = GetDevice()->createCommandList();
 
     std::shared_ptr<donut::vfs::NativeFileSystem> nativeFS = std::make_shared<donut::vfs::NativeFileSystem>();
-    m_fontDroidMono = this->LoadFont(*nativeFS, GetDirectoryWithExecutable().parent_path() / "Assets" / "Media/Fonts/DroidSans/DroidSans-Mono.ttf", 16.0f);
-
-    ImGui_Console::Options options;
-    options.font = m_fontDroidMono;
+    m_fontDroidMono = this->CreateFontFromFile(*nativeFS, GetDirectoryWithExecutable().parent_path() / "Assets" / "Media/Fonts/DroidSans/DroidSans-Mono.ttf", 16.0f);
 
     ImGui::GetIO().IniFilename = nullptr;
 }
@@ -73,6 +70,8 @@ void PathtracerUI::buildUI(void)
     {
         BeginFullScreenWindow();
 
+        ImGui::PushFont(m_fontDroidMono->GetScaledFont());
+
         char messageBuffer[256];
         const auto& stats = Scene::GetLoadingStats();
         snprintf(messageBuffer, std::size(messageBuffer), "Loading scene %s, please wait...\nObjects: %d/%d, Textures: %d/%d", m_app.GetCurrentSceneName().c_str(),
@@ -81,10 +80,14 @@ void PathtracerUI::buildUI(void)
 
         DrawScreenCenteredText(messageBuffer);
 
+        ImGui::PopFont();
+
         EndFullScreenWindow();
 
         return;
     }
+
+    ImGui::PushFont(m_fontDroidMono->GetScaledFont());
 
     bool updateAccum = false;
     bool updateAccelerationStructure = false;
@@ -328,6 +331,8 @@ void PathtracerUI::buildUI(void)
         }
     }
     ImGui::End();
+
+    ImGui::PopFont();
 
     if (updateAccum)
         m_app.ResetAccumulation();

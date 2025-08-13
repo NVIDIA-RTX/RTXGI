@@ -14,12 +14,12 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define NRD_HEADER_ONLY
 //#include <NRDEncoding.hlsli>
-#include "../../external/RayTracingDenoiser/Shaders/Include/NRDEncoding.hlsli"
+#include "../../External/RayTracingDenoiser/Shaders/Include/NRDEncoding.hlsli"
 #if NRD_NORMAL_ENCODING != 2 // 2 == NRD_NORMAL_ENCODING_R10G10B10A2_UNORM
 #error not configured correctly
 #endif
 //#include <NRD.hlsli>
-#include "../../external/RayTracingDenoiser/Shaders/Include/NRD.hlsli"
+#include "../../External/RayTracingDenoiser/Shaders/Include/NRD.hlsli"
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma pack_matrix(row_major)

@@ -556,13 +556,14 @@ public:
 private:
     nrc::vulkan::Context* m_nrcContext;
 };
+#endif
 
 std::unique_ptr<NrcIntegration> CreateNrcIntegration(nvrhi::GraphicsAPI api)
 {
+#ifdef NRC_WITH_VULKAN
     if (api == nvrhi::GraphicsAPI::VULKAN)
         return std::make_unique<NrcVulkanIntegration>();
     else
+#endif
         return std::make_unique<NrcD3d12Integration>();
 }
-
-#endif

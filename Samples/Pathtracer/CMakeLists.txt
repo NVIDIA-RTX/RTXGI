@@ -23,7 +23,7 @@ option (NRD_EMBEDS_DXBC_SHADERS "NRD embeds DXBC shaders" OFF)
 set(NRC_LIB_DIR ${NRC_DIR}/Lib)
 
 # Is the NRC package a dev package (internal), or production
-if(EXISTS ${NRC_LIB_DIR}/NRC_D3D12_relwithdebinfo.lib)
+if(EXISTS ${NRC_LIB_DIR}/NRC_D3D12_relwithdebinfo.lib OR EXISTS ${NRC_LIB_DIR}/NRC_D3D12_debug.lib) 
     set (NRC_DEV_BUILD true)
 else()
     set (NRC_DEV_BUILD false)
@@ -54,7 +54,7 @@ set(SHARC_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../Libraries)
 if(DONUT_WITH_VULKAN)
     set (SHADERMAKE_GENERAL_ARGS_SPIRV "--shaderModel 6_6 -I ${NRC_DIR}/include -I ${SHARC_INCLUDE_DIR}/Sharc/include --vulkanMemoryLayout dx")
 endif()
-set (SHADERMAKE_GENERAL_ARGS_DXIL "--shaderModel 6_6 --useAPI --WX --PDB -I ${NRC_DIR}/include -I ${SHARC_INCLUDE_DIR}/Sharc/include")
+set (SHADERMAKE_GENERAL_ARGS_DXIL "--shaderModel 6_6 --platform DXIL --WX --PDB -I ${NRC_DIR}/include -I ${SHARC_INCLUDE_DIR}/Sharc/include")
 
 donut_compile_shaders(
         TARGET ${project}_shaders

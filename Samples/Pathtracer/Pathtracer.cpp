@@ -126,8 +126,8 @@ bool Pathtracer::Init(int argc, const char* const* argv)
     {
         const char* arg = argv[n];
 
-        if (!strcmp(arg, "-accumulate"))
-            m_ui.denoiserSelection = DenoiserSelection::Accumulation;
+        if (!strcmp(arg, "-noaccumulation"))
+            m_ui.denoiserSelection = DenoiserSelection::None;
         else if (!strcmp(arg, "-scene"))
             sceneName = (char*)argv[n + 1];
         else if (!strcmp(arg, "-camera"))
@@ -901,10 +901,15 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 
     LightingConstants constants = {};
     constants.skyColor = m_ui.enableSky ? float4(m_ui.skyColor * m_ui.skyIntensity, 1.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);
+    
+    m_viewPrevious.UpdateCache();
+    m_view.UpdateCache();
+    
     m_view.FillPlanarViewConstants(constants.view);
     m_viewPrevious.FillPlanarViewConstants(constants.viewPrev);
 
     static PlanarViewConstants updatePassView = constants.view;
+    
 
 #if ENABLE_SHARC
     if (m_ui.sharcUpdateViewCamera || m_ui.techSelection != TechSelection::Sharc)
