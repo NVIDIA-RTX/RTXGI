@@ -1,5 +1,20 @@
 # RTXGI SDK Change Log
 
+## 2.4.0
+
+### RTXGI
+- Update framework dependencies.
+- Minor refactor of the pathtracing sample.
+
+### NRC
+- Update to v0.14.1.0.
+- Bugfix related to the internal hashgrid.
+- Minor change in API to allow optional custom CUDA dll path loading.
+
+### SHaRC
+- Update to v1.4.4.0.
+- Bugfix related to updating the `hashEntriesBuffer`.
+
 ## 2.3.2
 
 ### RTXGI
