@@ -24,16 +24,6 @@ RWStructuredBuffer<uint4>           u_SharcVoxelDataBuffer      : register(u2, s
 RWStructuredBuffer<uint4>           u_SharcVoxelDataBufferPrev  : register(u3, space3);
 
 [numthreads(LINEAR_BLOCK_SIZE, 1, 1)]
-void sharcCompaction(in uint2 did : SV_DispatchThreadID)
-{
-    HashMapData hashMapData;
-    hashMapData.capacity = g_Lighting.sharcEntriesNum;
-    hashMapData.hashEntriesBuffer = u_SharcHashEntriesBuffer;
-
-    SharcCopyHashEntry(did.x, hashMapData, u_HashCopyOffsetBuffer);
-}
-
-[numthreads(LINEAR_BLOCK_SIZE, 1, 1)]
 void sharcResolve(in uint2 did : SV_DispatchThreadID)
 {
     SharcParameters sharcParameters;
@@ -55,9 +45,5 @@ void sharcResolve(in uint2 did : SV_DispatchThreadID)
     resolveParameters.cameraPositionPrev = g_Lighting.sharcCameraPositionPrev.xyz;
     resolveParameters.enableAntiFireflyFilter = g_Lighting.sharcEnableAntifirefly;
 
-    SharcResolveEntry(did.x, sharcParameters, resolveParameters
-#if SHARC_DEFERRED_HASH_COMPACTION
-    , u_HashCopyOffsetBuffer
-#endif // SHARC_DEFERRED_HASH_COMPACTION
-    );
+    SharcResolveEntry(did.x, sharcParameters, resolveParameters);
 }

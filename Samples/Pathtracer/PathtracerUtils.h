@@ -317,7 +317,7 @@ void GetLightData(LightConstants light, float3 surfacePos, float2 rand2, bool en
             incidentVector = normalize(incidentVector);
         }
         else
-            incidentVector = light.direction;
+            incidentVector = normalize(light.direction);
 
         lightDistance = FLT_MAX;
         halfAngularSize = light.angularSizeOrInvRange * 0.5f;

@@ -131,6 +131,8 @@ void PathtracerUI::buildUI(void)
                 ImGui::EndCombo();
             }
 
+            ImGui::Checkbox("VSync", &m_ui.enableVSync);
+            ImGui::SameLine();
             updateAccum |= ImGui::Checkbox("Jitter", &m_ui.enableJitter);
             ImGui::SameLine();
             updateAccum |= ImGui::Checkbox("Russian Roulette", &m_ui.enableRussianRoulette);
@@ -259,6 +261,7 @@ void PathtracerUI::buildUI(void)
             updateAccum |= ImGui::Checkbox("Enable Resolve", &m_ui.sharcEnableResolve);
             updateAccum |= ImGui::Checkbox("Enable Anti Firefly", &m_ui.sharcEnableAntiFireflyFilter);
             updateAccum |= ImGui::Checkbox("Update View Camera", &m_ui.sharcUpdateViewCamera);
+            updateAccum |= ImGui::Checkbox("Enable Material Demodulation", &m_ui.sharcEnableMaterialDemodulation);
             updateAccum |= ImGui::Checkbox("Enable Debug", &m_ui.sharcEnableDebug);
             updateAccum |= ImGui::SliderInt("Accumulation Frame Number", &m_ui.sharcAccumulationFrameNum, 1, 30);
             updateAccum |= ImGui::SliderInt("Stale Frame Number", &m_ui.sharcStaleFrameFrameNum, 1, 128);

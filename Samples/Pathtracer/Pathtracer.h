@@ -214,8 +214,6 @@ private:
     nvrhi::BindingSetHandle m_sharcBindingSetSwapped;
     nvrhi::ShaderHandle m_sharcResolveCS;
     nvrhi::ComputePipelineHandle m_sharcResolvePSO;
-    nvrhi::ShaderHandle m_sharcHashCopyCS;
-    nvrhi::ComputePipelineHandle m_sharcHashCopyPSO;
 #endif // ENABLE_SHARC
 
 #if ENABLE_NRD

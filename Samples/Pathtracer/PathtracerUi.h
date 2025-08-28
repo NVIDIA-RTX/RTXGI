@@ -67,6 +67,7 @@ enum class ToneMappingOperator : uint32_t
 struct UIData
 {
     bool showUI = true;
+    bool enableVSync = false;
     bool enableAnimations = false;
     bool enableJitter = true;
     bool enableTransmission = false;
@@ -131,6 +132,7 @@ struct UIData
     bool sharcEnableResolve = true;
     bool sharcEnableAntiFireflyFilter = true;
     bool sharcUpdateViewCamera = true;
+    bool sharcEnableMaterialDemodulation = true;
     bool sharcEnableDebug = false;
     int sharcDownscaleFactor = 5;
     float sharcSceneScale = 50.0f;

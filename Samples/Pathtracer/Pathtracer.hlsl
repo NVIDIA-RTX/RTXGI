@@ -26,6 +26,8 @@
 #include "LightingCb.h"
 #include "PathtracerUtils.h"
 
+#define SHARC_MATERIAL_DEMODULATION     1
+
 #include "SharcCommon.h"
 
 #define BOUNCES_MIN                     3
@@ -119,6 +121,10 @@ RayDesc GeneratePinholeCameraRay(float2 normalisedDeviceCoordinate, float4x4 vie
 // Note that we use dedicated hit group with simpler shaders for shadow rays
 float3 CastShadowRay(float3 hitPosition, float3 surfaceNormal, float3 directionToLight, float tracingDistance)
 {
+    // No need to cast shadow rays for back-facing primitives if there is no transmission
+    if (!g_Global.enableTransmission && dot(surfaceNormal, directionToLight) < 0)
+        return float3(0, 0, 0);
+
     RayDesc ray;
     ray.Origin = OffsetRay(hitPosition, surfaceNormal);
     ray.Direction = directionToLight;
@@ -166,8 +172,7 @@ bool SampleLightRIS(inout uint rngState, float3 hitPosition, float3 surfaceNorma
 
 #if SHADOW_RAY_IN_RIS
             // Casting a shadow ray for all candidates here is expensive, but can significantly decrease noise
-            float3 vectorToLight = normalize(lightVector);
-            if (any(CastShadowRay(hitPosition, surfaceNormal, vectorToLight, lightDistance) > 0.0f))
+            if (any(CastShadowRay(hitPosition, surfaceNormal, lightVector, lightDistance) > 0.0f))
                 continue;
 #endif
 
@@ -199,6 +204,10 @@ bool SampleLightRIS(inout uint rngState, float3 hitPosition, float3 surfaceNorma
 float GetSpecularBrdfProbability(MaterialSample material, float3 viewVector, float3 shadingNormal)
 {
 #if ENABLE_SPECULAR_LOBE
+    // Fast path for mirrors
+    if (material.metalness == 1.0f && material.roughness == 0.0f)
+        return 1.0f;
+
     // Evaluate Fresnel term using the shading normal
     // Note: we use the shading normal instead of the microfacet normal (half-vector) for Fresnel term here. That's suboptimal for rough surfaces at grazing angles, but half-vector is yet unknown at this point
     float specularF0 = luminance(material.specularF0);
@@ -617,7 +626,14 @@ void PathTraceRays()
             SharcHitData sharcHitData;
             sharcHitData.positionWorld = hitPos;
             sharcHitData.normalWorld = geometryNormal;
-
+#if SHARC_MATERIAL_DEMODULATION
+            sharcHitData.materialDemodulation = float3(1.0f, 1.0f, 1.0f);
+            if (g_Global.sharcMaterialDemodulation)
+            {
+                float3 specularFAvg = material.specularF0 + (1.0f - material.specularF0) * 0.047619; // 1/21
+                sharcHitData.materialDemodulation = max(material.diffuseAlbedo, 0.05f) + max(material.specularF0, 0.02f) * luminance(specularFAvg);
+            }
+#endif // SHARC_MATERIAL_DEMODULATION
 #if SHARC_SEPARATE_EMISSIVE
             sharcHitData.emissive = material.emissiveColor;
 #endif // SHARC_SEPARATE_EMISSIVE
@@ -634,8 +650,8 @@ void PathTraceRays()
 
                 materialRoughnessPrev = min(materialRoughnessPrev, 0.99f);
                 float alpha = materialRoughnessPrev * materialRoughnessPrev;
-                float footrprint = payload.hitDistance * sqrt(0.5f * alpha * alpha / (1.0f - alpha * alpha));
-                isValidHit &= footrprint > voxelSize;
+                float footprint = payload.hitDistance * sqrt(0.5f * alpha * alpha / (1.0f - alpha * alpha));
+                isValidHit &= footprint > voxelSize;
 
                 float3 sharcRadiance;
                 if (isValidHit && SharcGetCachedRadiance(sharcParameters, sharcHitData, sharcRadiance, false))
@@ -650,6 +666,8 @@ void PathTraceRays()
                 {
                     float3 debugColor;
                     SharcGetCachedRadiance(sharcParameters, sharcHitData, debugColor, true);
+                    //debugColor = HashGridDebugHashCollisions(sharcHitData.positionWorld, sharcHitData.normalWorld, sharcParameters.gridParameters, sharcParameters.hashMapData);
+
                     u_Output[DispatchRaysIndex().xy] = float4(debugColor, 1.0f);
 
                     return;
@@ -661,30 +679,26 @@ void PathTraceRays()
             if (g_Global.enableLighting)
             {
                 // Evaluate direct light (next event estimation), start by sampling one light 
-                LightConstants light = g_Lighting.lights[0];
-                float lightWeight = 1.0f;
+                LightConstants light;
+                float lightWeight;
 
                 if (SampleLightRIS(rngState, hitPos, geometryNormal, light, lightWeight))
                 {
-                    float3 shadowHitPos = hitPos;
-                    float3 shadowNormal = geometryNormal;
-                    float3 shadowV = viewVector;
-
                     // Prepare data needed to evaluate the light
                     float3 incidentVector;
                     float lightDistance;
                     float irradiance;
                     float2 rand2 = float2(Rand(rngState), Rand(rngState));
-                    GetLightData(light, shadowHitPos, rand2, g_Global.enableSoftShadows, incidentVector, lightDistance, irradiance);
-                    float3 vectorToLight = normalize(-incidentVector);
+                    GetLightData(light, hitPos, rand2, g_Global.enableSoftShadows, incidentVector, lightDistance, irradiance);
+                    float3 vectorToLight = -incidentVector;
 
                     // Cast shadow ray towards the selected light
-                    float3 lightVisibility = CastShadowRay(shadowHitPos, shadowNormal, vectorToLight, lightDistance);
+                    float3 lightVisibility = CastShadowRay(hitPos, geometryNormal, vectorToLight, lightDistance);
                     if (any(lightVisibility > 0.0f))
                     {
                         // If light is not in shadow, evaluate BRDF and accumulate its contribution into radiance
                         // This is an entry point for evaluation of all other BRDFs based on selected configuration (for direct light)
-                        float3 lightContribution = evalCombinedBRDF(shadingNormal, vectorToLight, shadowV, material) * light.color * irradiance * lightWeight * lightVisibility;
+                        float3 lightContribution = evalCombinedBRDF(shadingNormal, vectorToLight, viewVector, material) * light.color * irradiance * lightWeight * lightVisibility;
                         sampleRadiance += lightContribution * throughput;
                     }
                 }
@@ -725,40 +739,31 @@ void PathTraceRays()
             // First, figure out whether to sample diffuse or specular BRDF
             int brdfType = DIFFUSE_TYPE;
 
-            // Fast path for mirrors
-            if (material.metalness == 1.0f && material.roughness == 0.0f)
+            float specularBrdfProbability = GetSpecularBrdfProbability(material, viewVector, shadingNormal);
+            if (Rand(rngState) < specularBrdfProbability)
             {
                 brdfType = SPECULAR_TYPE;
+                throughput /= specularBrdfProbability;
             }
-            else
+            else if (g_Global.enableTransmission)
             {
-                float specularBrdfProbability = GetSpecularBrdfProbability(material, viewVector, shadingNormal);
+                float transmissiveProbability = (1.0f - specularBrdfProbability) * material.transmission;
 
-                if (Rand(rngState) < specularBrdfProbability)
+                if (Rand(rngState) < material.transmission)
                 {
-                    brdfType = SPECULAR_TYPE;
-                    throughput /= specularBrdfProbability;
-                }
-                else if (g_Global.enableTransmission)
-                {
-                    float transmissiveProbability = (1.0f - specularBrdfProbability) * material.transmission;
-
-                    if (Rand(rngState) < material.transmission)
-                    {
-                        brdfType = TRANSMISSIVE_TYPE;
-                        throughput /= transmissiveProbability;
-                    }
-                    else
-                    {
-                        brdfType = DIFFUSE_TYPE;
-                        throughput /= (1.0f - specularBrdfProbability - transmissiveProbability);
-                    }
+                    brdfType = TRANSMISSIVE_TYPE;
+                    throughput /= transmissiveProbability;
                 }
                 else
                 {
                     brdfType = DIFFUSE_TYPE;
-                    throughput /= (1.0f - specularBrdfProbability);
+                    throughput /= (1.0f - specularBrdfProbability - transmissiveProbability);
                 }
+            }
+            else
+            {
+                brdfType = DIFFUSE_TYPE;
+                throughput /= (1.0f - specularBrdfProbability);
             }
 
 #if SHARC_QUERY
@@ -832,7 +837,6 @@ void PathTraceRays()
             throughput *= brdfWeight;
 
             SharcSetThroughput(sharcState, throughput);
-
             if (!isUpdatePass && luminance(throughput) < g_Global.throughputThreshold)
                 break;
         }

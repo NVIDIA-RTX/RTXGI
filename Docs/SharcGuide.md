@@ -17,7 +17,6 @@ At Load-Time
 Create main resources:
 * `Hash entries` buffer - structured buffer with 64-bits entries to store the hashes
 * `Voxel data` buffer - structured buffer with 128-bit entries which stores accumulated radiance and sample count. Two instances are used to store current and previous frame data
-* `Copy offset` buffer - structured buffer with 32-bits per entry used for data compaction
 
 The number of entries in each buffer should be the same, it represents the number of scene voxels used for radiance caching. A solid baseline for most scenes can be the usage of $2^{22}$ elements. Commonly a power of 2 values are suggested. Higher element count can be used for scenes with high depth complexity, lower element count reduce memmory pressure, but can result in more hash collisions.
 
@@ -26,7 +25,7 @@ The number of entries in each buffer should be the same, it represents the numbe
 At Render-Time
 
 * **Populate cache data** using sparse tracing against the scene
-* **Combine old and new cache data**, perform data compaction
+* **Combine old and new cache data**
 * **Perform tracing** with early path termination using cached data
 
 ## Hash Grid Visualization
@@ -64,13 +63,12 @@ Instead of the original trace call, we should have the following four passes wit
 
 ### Resource Binding
 
-The SDK provides shader-side headers and code snippets that implement most of the steps above. Shader code should include [SharcCommon.h](https://github.com/NVIDIAGameWorks/SHARC/blob/main/include/SharcCommon.h) which already includes [HashGridCommon.h](https://github.com/NVIDIAGameWorks/SHARC/blob/main/include/HashGridCommon.h)
+The SDK provides shader-side headers and code snippets that implement most of the steps above. Shader code should include [SharcCommon.h](https://github.com/NVIDIA-RTX/SHARC/blob/main/include/SharcCommon.h) which already includes [HashGridCommon.h](https://github.com/NVIDIA-RTX/SHARC/blob/main/include/HashGridCommon.h)
 
 | **Render Pass**  | **Hash Entries** | **Voxel Data** | **Voxel Data Previous** | **Copy Offset** |
 |:-----------------|:----------------:|:--------------:|:-----------------------:|:---------------:|
 | SHaRC Update     |        RW        |       RW       |           Read          |       RW*       |
 | SHaRC Resolve    |       Read       |       RW       |           Read          |      Write      |
-| SHaRC Compaction |        RW        |                |                         |        RW       |
 | SHaRC Render     |       Read       |      Read      |                         |                 |
 
 *Read - resource can be read-only*  
@@ -91,9 +89,9 @@ This pass runs a full path tracer loop for a subset of screen pixels with some m
 <figcaption>Figure 1. Path tracer loop during SHaRC Update pass</figcaption>
 </figure>
 
-### SHaRC Resolve and Compaction
+### SHaRC Resolve
 
-`Resolve` pass is performed using compute shader which runs `SharcResolveEntry()` for each element. `Compaction` pass uses `SharcCopyHashEntry()` call.
+`Resolve` pass is performed using compute shader which runs `SharcResolveEntry()` for each element.
 > :tip: Check [Resource Binding](#resource-binding) section for details on the required resources and their usage for each pass 
 
 `SharcResolveEntry()` takes maximum number of accumulated frames as an input parameter to control the quality and responsivness of the cached data. Larger values can increase the quality at increase response times. `staleFrameNumMax` parameter is used to control the lifetime of cached elements, it is used to control cache occupancy
@@ -131,7 +129,7 @@ Sample count uses SHARC_SAMPLE_NUM_BIT_NUM(18) bits to store accumulated sample 
 
 SHaRC radiance values are internally premultiplied with `SHARC_RADIANCE_SCALE` and accumulated using 32-bit integer representation per component.
 
-> :note: [SharcCommon.h](https://github.com/NVIDIAGameWorks/SHARC/blob/main/include/SharcCommon.h) provides several methods to verify potential overflow in internal data structures. `SharcDebugBitsOccupancySampleNum()` and `SharcDebugBitsOccupancyRadiance()` can be used to verify consistency in the sample count and corresponding radiance values representation.
+> :note: [SharcCommon.h](https://github.com/NVIDIA-RTX/SHARC/blob/main/include/SharcCommon.h) provides several methods to verify potential overflow in internal data structures. `SharcDebugBitsOccupancySampleNum()` and `SharcDebugBitsOccupancyRadiance()` can be used to verify consistency in the sample count and corresponding radiance values representation.
 
 `HashGridDebugOccupancy()` should be used to validate cache occupancy. With a static camera around 10-20% of elements should be used on average, on fast camera movement the occupancy will go up. Increased occupancy can negatively impact performance, to control that we can increase the element count as well as decrease the threshold for the stale frames to evict outdated elements more agressivly.
 

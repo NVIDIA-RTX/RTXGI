@@ -340,10 +340,6 @@ bool Pathtracer::Init(int argc, const char* const* argv)
             m_sharcResolveCS = m_shaderFactory->CreateShader("app/SharcResolve.hlsl", "sharcResolve", nullptr, nvrhi::ShaderType::Compute);
             pipelineDesc.CS = m_sharcResolveCS;
             m_sharcResolvePSO = GetDevice()->createComputePipeline(pipelineDesc);
-
-            m_sharcHashCopyCS = m_shaderFactory->CreateShader("app/SharcResolve.hlsl", "sharcCompaction", nullptr, nvrhi::ShaderType::Compute);
-            pipelineDesc.CS = m_sharcHashCopyCS;
-            m_sharcHashCopyPSO = GetDevice()->createComputePipeline(pipelineDesc);
         }
     }
 #endif // ENABLE_SHARC
@@ -1109,6 +1105,7 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 #endif // ENABLE_NRC
 
 #if ENABLE_SHARC
+    globalConstants.sharcMaterialDemodulation = m_ui.sharcEnableMaterialDemodulation;
     globalConstants.sharcDebug = m_ui.sharcEnableDebug;
 #endif // ENABLE_SHARC
 
@@ -1159,8 +1156,10 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 
             // NRC query pathtracing pass
             ScopedMarker scopedMarker(m_commandList, "NrcQueryPathtracingPass");
+#if ENABLE_NRD
             if (m_denoiserBindingSet && enableNrd)
                 state.bindings[DescriptorSetIDs::Denoiser] = m_denoiserBindingSet;
+#endif // ENABLE_NRD
 
             state.shaderTable = m_pipelinePermutations[PipelineType::NRC_Query].shaderTable;
             m_commandList->setRayTracingState(state);
@@ -1213,10 +1212,14 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 
         state.bindings[DescriptorSetIDs::Sharc] = m_sharcBindingSet;
 
+        static bool enableMaterialDemodulation = m_ui.sharcEnableMaterialDemodulation;
         if (m_ui.sharcEnableUpdate)
         {
-            if (m_ui.sharcEnableClear || m_sceneReloaded)
+            if (m_ui.sharcEnableClear || m_sceneReloaded ||
+                (enableMaterialDemodulation != m_ui.sharcEnableMaterialDemodulation))
             {
+                enableMaterialDemodulation = m_ui.sharcEnableMaterialDemodulation;
+
                 m_commandList->clearBufferUInt(m_sharcHashEntriesBuffer, m_sharcInvalidEntry);
                 m_commandList->clearBufferUInt(m_sharcCopyOffsetBuffer, 0);
                 m_commandList->clearBufferUInt(m_sharcVoxelDataBuffer, 0);
@@ -1225,6 +1228,8 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 
             if (m_ui.sharcEnableResolve)
             {
+                ScopedMarker scopedMarker(m_commandList, "SharcClearBuffer");
+
                 std::swap(m_sharcVoxelDataBuffer, m_sharcVoxelDataBufferPrev);
                 std::swap(m_sharcBindingSet, m_sharcBindingSetSwapped);
 
@@ -1268,23 +1273,14 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
                     ScopedMarker scopedMarker(m_commandList, "SharcResolve");
                     m_commandList->dispatch(dispatchSize.x, dispatchSize.y);
                 }
-
-                // SHARC compaction
-                {
-                    computeState.pipeline = m_sharcHashCopyPSO;
-                    m_commandList->setComputeState(computeState);
-
-                    const uint groupSize = 256;
-                    const dm::uint2 dispatchSize = { DivideRoundUp(m_sharcEntriesNum, groupSize), 1 };
-                    ScopedMarker scopedMarker(m_commandList, "SharcCompaction");
-                    m_commandList->dispatch(dispatchSize.x, dispatchSize.y);
-                }
             }
         }
 
         // Unified Binding
+ #if ENABLE_NRD
         if (m_denoiserBindingSet && enableNrd)
             state.bindings[DescriptorSetIDs::Denoiser] = m_denoiserBindingSet;
+#endif // ENABLE_NRD
 
         // SHARC query
         {
@@ -1319,7 +1315,10 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
         {
             nvrhi::ComputeState computeState;
             computeState.bindings = { m_globalBindingSet, m_denoiserBindingSet };
+            computeState.pipeline = m_denoiserReblurPackPSO;
+#if ENABLE_NRC
             computeState.pipeline = (m_ui.techSelection == TechSelection::Nrc) ? m_denoiserReblurPack_NRC_PSO : m_denoiserReblurPackPSO;
+#endif // ENABLE_NRC
             m_commandList->setComputeState(computeState);
 
             const uint groupSize = 16;
@@ -1409,6 +1408,8 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
             m_nrc->EndFrame(device->getNativeQueue(nvrhi::ObjectTypes::VK_Queue, nvrhi::CommandQueue::Graphics));
     }
 #endif // ENABLE_NRC
+
+    GetDeviceManager()->SetVsyncEnabled(m_ui.enableVSync);
 }
 
 std::shared_ptr<donut::engine::ShaderFactory> Pathtracer::GetShaderFactory()

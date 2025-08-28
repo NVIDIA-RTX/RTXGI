@@ -1,5 +1,17 @@
 # RTXGI SDK Change Log
 
+## 2.5.0
+
+### RTXGI
+- Addition of a VSync option to the pathtracer sample to simulate a ubiquituous 60Hz scenario (on a typical monitor).
+- Addition of cache visualization with material demodulation toggle.
+
+### SHaRC
+- Removal of the compaction option.
+- Introduction of optional material demodulation, improving detail retention when required, particularly for reflective/refractive paths.
+- Addition of a debug pass to visualize hash collisions.
+- Documentation updates.
+
 ## 2.4.0
 
 ### RTXGI

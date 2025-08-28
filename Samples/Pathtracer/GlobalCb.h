@@ -46,7 +46,7 @@ struct GlobalConstants
 
     uint nrcEnableTerminationHeuristic;
     uint nrcSkipDeltaVertices;
-    uint pad0;
+    uint sharcMaterialDemodulation;
     float nrcTerminationHeuristicThreshold;
 
     float4 nrdHitDistanceParams;
