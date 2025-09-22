@@ -1,5 +1,10 @@
 # RTXGI SDK Change Log
 
+## 2.5.1
+
+### RTXGI
+- Update the Donut framework.
+
 ## 2.5.0
 
 ### RTXGI
