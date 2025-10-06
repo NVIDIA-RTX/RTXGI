@@ -38,21 +38,21 @@
 #define TRACING_DISTANCE                1000.0f
 #define SHARC_ENABLE_DEBUG              1
 
-struct RayPayload
+struct [raypayload] RayPayload
 {
-    float hitDistance;
-    uint instanceID;
-    uint primitiveIndex;
-    uint geometryIndex;
-    float2 barycentrics;
+    float hitDistance       : read(caller) : write(closesthit, miss);
+    uint instanceID         : read(caller) : write(closesthit);
+    uint primitiveIndex     : read(caller) : write(closesthit);
+    uint geometryIndex      : read(caller) : write(closesthit);
+    float2 barycentrics     : read(caller) : write(closesthit);
 
     bool Hit() { return hitDistance > 0.0f; }
     bool IsFrontFacing() { return asuint(hitDistance) & 0x1; }
 };
 
-struct ShadowRayPayload
+struct [raypayload] ShadowRayPayload
 {
-    float3 visibility;
+    float3 visibility       : read(caller, anyhit) : write(caller, closesthit, anyhit);
 };
 
 ConstantBuffer<LightingConstants>               g_Lighting                              : register(b0, space0);
@@ -91,10 +91,10 @@ RWStructuredBuffer<uint>                        countersData                    
 #define WRITE_TRAINING_OUTPUT_DEBUG_PARAMS
 #define WRITE_QUERY_OUTPUT_DEBUG_PARAMS
 
-RWStructuredBuffer<uint64_t>    u_SharcHashEntriesBuffer        : register(u0, space3);
-RWStructuredBuffer<uint>        u_HashCopyOffsetBuffer          : register(u1, space3);
-RWStructuredBuffer<uint4>       u_SharcVoxelDataBuffer          : register(u2, space3);
-RWStructuredBuffer<uint4>       u_SharcVoxelDataBufferPrev      : register(u3, space3);
+RWStructuredBuffer<uint64_t>                u_SharcHashEntriesBuffer    : register(u0, space3);
+RWStructuredBuffer<uint>                    u_SharcLockBuffer           : register(u1, space3);
+RWStructuredBuffer<SharcAccumulationData>   u_SharcAccumulationBuffer   : register(u2, space3);
+RWStructuredBuffer<SharcPackedData>         u_SharcResolvedBuffer       : register(u3, space3);
 
 RayDesc GeneratePinholeCameraRay(float2 normalisedDeviceCoordinate, float4x4 viewToWorld, float4x4 viewToClip)
 {
@@ -316,15 +316,13 @@ void Miss(inout RayPayload payload : SV_RayPayload)
 [shader("closesthit")]
 void ClosestHit(inout RayPayload payload : SV_RayPayload, in Attributes attrib : SV_IntersectionAttributes)
 {
-    payload.hitDistance = RayTCurrent();
     payload.instanceID = InstanceID();
     payload.primitiveIndex = PrimitiveIndex();
     payload.geometryIndex = GeometryIndex();
     payload.barycentrics = attrib.uv;
 
-    uint packedDistance = asuint(payload.hitDistance) & (~0x1u);
+    uint packedDistance = asuint(RayTCurrent()) & (~0x1u);
     packedDistance |= HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE ? 0x1 : 0x0;
-
     payload.hitDistance = asfloat(packedDistance);
 }
 
@@ -495,12 +493,12 @@ void PathTraceRays()
         sharcParameters.hashMapData.hashEntriesBuffer = u_SharcHashEntriesBuffer;
 
 #if !SHARC_ENABLE_64_BIT_ATOMICS
-        sharcParameters.hashMapData.lockBuffer = u_HashCopyOffsetBuffer;
+        sharcParameters.hashMapData.lockBuffer = u_SharcLockBuffer;
 #endif // !SHARC_ENABLE_64_BIT_ATOMICS
 
-        sharcParameters.voxelDataBuffer = u_SharcVoxelDataBuffer;
-        sharcParameters.voxelDataBufferPrev = u_SharcVoxelDataBufferPrev;
-
+        sharcParameters.accumulationBuffer = u_SharcAccumulationBuffer;
+        sharcParameters.resolvedBuffer = u_SharcResolvedBuffer;
+        sharcParameters.radianceScale = SHARC_RADIANCE_SCALE;
         sharcParameters.enableAntiFireflyFilter = g_Lighting.sharcEnableAntifirefly;
     }
 
@@ -533,13 +531,6 @@ void PathTraceRays()
 
         bool internalRay = false;
 
-        RayPayload payload;
-        payload.hitDistance = -1.0f;
-        payload.instanceID = ~0U;
-        payload.primitiveIndex = ~0U;
-        payload.geometryIndex = ~0U;
-        payload.barycentrics = 0;
-
         int bounce;
         for (bounce = 0; true/* break from the middle */; bounce++)
         {
@@ -549,13 +540,18 @@ void PathTraceRays()
             rayFlags &= (~RAY_FLAG_CULL_BACK_FACING_TRIANGLES);
 #endif // DISABLE_BACK_FACE_CULLING
 
+            RayPayload payload;
+            payload.hitDistance = -1.0f;
+            payload.instanceID = ~0U;
+            payload.primitiveIndex = ~0U;
+            payload.geometryIndex = ~0U;
+            payload.barycentrics = 0;
+
             TraceRay(SceneBVH, rayFlags, 0xFF, 0, 0, 0, ray, payload);
 
 #if SHARC_UPDATE
-            // When updating SHaRC, we're only interested in one path segment at a time
-            // (SHaRC handles the propagation of radiance along the path)
-            // So we don't need to track throughput along the path.
-            // A simple way to achieve this is to reset it to 1 at the start of the bounce.
+            // SHaRC handles radiance propagation per segment; no path throughput needed.
+            // Reset throughput to 1 at each bounce.
             sampleRadiance = float3(0.0f, 0.0f, 0.0f);
             throughput = float3(1.0f, 1.0f, 1.0f);
 #endif // SHARC_UPDATE

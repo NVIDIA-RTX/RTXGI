@@ -13,15 +13,14 @@
 
 #include "SharcCommon.h"
 
-#define LINEAR_BLOCK_SIZE           256
+#define LINEAR_BLOCK_SIZE                   256
 
-ConstantBuffer<LightingConstants>   g_Lighting                  : register(b0, space0);
-ConstantBuffer<GlobalConstants>     g_Global                    : register(b1, space0);
+ConstantBuffer<LightingConstants>           g_Lighting                  : register(b0, space0);
+ConstantBuffer<GlobalConstants>             g_Global                    : register(b1, space0);
 
-RWStructuredBuffer<uint64_t>        u_SharcHashEntriesBuffer    : register(u0, space3);
-RWStructuredBuffer<uint>            u_HashCopyOffsetBuffer      : register(u1, space3);
-RWStructuredBuffer<uint4>           u_SharcVoxelDataBuffer      : register(u2, space3);
-RWStructuredBuffer<uint4>           u_SharcVoxelDataBufferPrev  : register(u3, space3);
+RWStructuredBuffer<uint64_t>                u_SharcHashEntriesBuffer    : register(u0, space3);
+RWStructuredBuffer<SharcAccumulationData>   u_SharcAccumulationBuffer   : register(u2, space3);
+RWStructuredBuffer<SharcPackedData>         u_SharcResolvedBuffer       : register(u3, space3);
 
 [numthreads(LINEAR_BLOCK_SIZE, 1, 1)]
 void sharcResolve(in uint2 did : SV_DispatchThreadID)
@@ -36,8 +35,9 @@ void sharcResolve(in uint2 did : SV_DispatchThreadID)
     sharcParameters.hashMapData.capacity = g_Lighting.sharcEntriesNum;
     sharcParameters.hashMapData.hashEntriesBuffer = u_SharcHashEntriesBuffer;
 
-    sharcParameters.voxelDataBuffer = u_SharcVoxelDataBuffer;
-    sharcParameters.voxelDataBufferPrev = u_SharcVoxelDataBufferPrev;
+    sharcParameters.accumulationBuffer = u_SharcAccumulationBuffer;
+    sharcParameters.resolvedBuffer = u_SharcResolvedBuffer;
+    sharcParameters.radianceScale = SHARC_RADIANCE_SCALE;
 
     SharcResolveParameters resolveParameters;
     resolveParameters.accumulationFrameNum = g_Lighting.sharcAccumulationFrameNum;

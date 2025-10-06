@@ -205,13 +205,12 @@ private:
     static const uint32_t m_sharcInvalidEntry = 0;
     uint32_t m_sharcEntriesNum = 0;
     nvrhi::BufferHandle m_sharcHashEntriesBuffer;
-    nvrhi::BufferHandle m_sharcCopyOffsetBuffer;
-    nvrhi::BufferHandle m_sharcVoxelDataBuffer;
-    nvrhi::BufferHandle m_sharcVoxelDataBufferPrev;
+    nvrhi::BufferHandle m_sharcLockBuffer;
+    nvrhi::BufferHandle m_sharcAccumulationBuffer;
+    nvrhi::BufferHandle m_sharcResolvedBuffer;
 
     nvrhi::BindingLayoutHandle m_sharcBindingLayout;
     nvrhi::BindingSetHandle m_sharcBindingSet;
-    nvrhi::BindingSetHandle m_sharcBindingSetSwapped;
     nvrhi::ShaderHandle m_sharcResolveCS;
     nvrhi::ComputePipelineHandle m_sharcResolvePSO;
 #endif // ENABLE_SHARC

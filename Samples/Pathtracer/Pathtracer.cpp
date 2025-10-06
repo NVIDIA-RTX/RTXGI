@@ -293,42 +293,34 @@ bool Pathtracer::Init(int argc, const char* const* argv)
         bufferDesc.keepInitialState = true;
         bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
 
-        bufferDesc.byteSize = m_sharcEntriesNum * sizeof(uint64_t);
         bufferDesc.structStride = sizeof(uint64_t);
+        bufferDesc.byteSize = m_sharcEntriesNum * bufferDesc.structStride;
         bufferDesc.debugName = "m_sharcHashEntriesBuffer";
         m_sharcHashEntriesBuffer = GetDevice()->createBuffer(bufferDesc);
 
-        bufferDesc.byteSize = m_sharcEntriesNum * sizeof(uint32_t);
         bufferDesc.structStride = sizeof(uint32_t);
-        bufferDesc.debugName = "m_sharcCopyOffsetBuffer";
-        m_sharcCopyOffsetBuffer = GetDevice()->createBuffer(bufferDesc);
+        bufferDesc.byteSize = m_sharcEntriesNum * bufferDesc.structStride;
+        bufferDesc.debugName = "m_sharcLockBuffer";
+        m_sharcLockBuffer = GetDevice()->createBuffer(bufferDesc);
 
-        bufferDesc.byteSize = m_sharcEntriesNum * sizeof(float4);
         bufferDesc.structStride = 4 * sizeof(uint32_t);
+        bufferDesc.byteSize = m_sharcEntriesNum * bufferDesc.structStride;
         bufferDesc.canHaveRawViews = true;
 
-        bufferDesc.debugName = "m_sharcVoxelDataBuffer";
-        m_sharcVoxelDataBuffer = GetDevice()->createBuffer(bufferDesc);
+        bufferDesc.debugName = "m_sharcAccumulationBuffer";
+        m_sharcAccumulationBuffer = GetDevice()->createBuffer(bufferDesc);
 
-        bufferDesc.debugName = "m_sharcVoxelDataBufferPrev";
-        m_sharcVoxelDataBufferPrev = GetDevice()->createBuffer(bufferDesc);
+        bufferDesc.debugName = "m_sharcResolvedBuffer";
+        m_sharcResolvedBuffer = GetDevice()->createBuffer(bufferDesc);
 
         nvrhi::BindingSetDesc bindingSetDesc;
         bindingSetDesc.bindings = {
             nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_sharcHashEntriesBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_sharcCopyOffsetBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_sharcVoxelDataBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_sharcVoxelDataBufferPrev),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_sharcLockBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_sharcAccumulationBuffer),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_sharcResolvedBuffer),
         };
         m_sharcBindingSet = GetDevice()->createBindingSet(bindingSetDesc, m_sharcBindingLayout);
-
-        bindingSetDesc.bindings = {
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_sharcHashEntriesBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_sharcCopyOffsetBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_sharcVoxelDataBufferPrev),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_sharcVoxelDataBuffer),
-        };
-        m_sharcBindingSetSwapped = GetDevice()->createBindingSet(bindingSetDesc, m_sharcBindingLayout);
 
         {
             nvrhi::ComputePipelineDesc pipelineDesc;
@@ -1221,19 +1213,8 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
                 enableMaterialDemodulation = m_ui.sharcEnableMaterialDemodulation;
 
                 m_commandList->clearBufferUInt(m_sharcHashEntriesBuffer, m_sharcInvalidEntry);
-                m_commandList->clearBufferUInt(m_sharcCopyOffsetBuffer, 0);
-                m_commandList->clearBufferUInt(m_sharcVoxelDataBuffer, 0);
-                m_commandList->clearBufferUInt(m_sharcVoxelDataBufferPrev, 0);
-            }
-
-            if (m_ui.sharcEnableResolve)
-            {
-                ScopedMarker scopedMarker(m_commandList, "SharcClearBuffer");
-
-                std::swap(m_sharcVoxelDataBuffer, m_sharcVoxelDataBufferPrev);
-                std::swap(m_sharcBindingSet, m_sharcBindingSetSwapped);
-
-                m_commandList->clearBufferUInt(m_sharcVoxelDataBuffer, 0);
+                m_commandList->clearBufferUInt(m_sharcAccumulationBuffer, 0);
+                m_commandList->clearBufferUInt(m_sharcResolvedBuffer, 0);
             }
 
             // SHARC update

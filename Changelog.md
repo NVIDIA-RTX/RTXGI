@@ -1,5 +1,15 @@
 # RTXGI SDK Change Log
 
+## 2.6.0
+
+### SHaRC
+- Updated to v1.6.0.0.
+- Radiance data is now now clearly separated between 'Update' and 'Resolve' passes. `SharcParameters::accumulationBuffer`(former `voxelDataBuffer`) is written in the 'Update' pass, while `SharcParameters::resolvedBuffer`(former `voxelDataBufferPrev`) is persistent storage populated in the 'Resolve' pass. Both buffers continue to use a 16-byte struct stride.
+- `SharcParameters::accumulationBuffer` no longer needs explicit clearing every frame, clear it once before first use.
+- `SharcParameters::resolvedBuffer` now stores now stores radiance at full 32-bit precision. Data is still interpreted as uint3 during buffer reads/writes.
+- `SHARC_RADIANCE_SCALE` is replaced by `SharcParameters::radianceScale`. For compatibility, the effective scale is the max of the two. `SharcParameters::radianceScale` improves utilization of the 32-bit per-frame accumulation range, does not affect the persistent data produced by the 'Resolve' pass, and can be adjusted per frame (e.g., with exposure).
+- Updated documentation.
+
 ## 2.5.1
 
 ### RTXGI
