@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -31,18 +31,19 @@ public:
     bool Initialize(uint32_t width, uint32_t height, donut::engine::ShaderFactory& shaderFactory);
     bool IsAvailable() const;
 
-    void RunDenoiserPasses(nvrhi::ICommandList* commandList,
-                           const RenderTargets& renderTargets,
-                           int pass,
-                           const donut::engine::PlanarView& view,
-                           const donut::engine::PlanarView& viewPrev,
-                           uint32_t frameIndex,
-                           float disocclusionThreshold,
-                           float disocclusionThresholdAlternate,
-                           bool useDisocclusionThresholdAlternateMix,
-                           bool enableValidation,
-                           const void* methodSettings,
-                           bool reset);
+    void RunDenoiserPasses(
+        nvrhi::ICommandList* commandList,
+        const RenderTargets& renderTargets,
+        int pass,
+        const donut::engine::PlanarView& view,
+        const donut::engine::PlanarView& viewPrev,
+        uint32_t frameIndex,
+        float disocclusionThreshold,
+        float disocclusionThresholdAlternate,
+        bool useDisocclusionThresholdAlternateMix,
+        bool enableValidation,
+        const void* methodSettings,
+        bool reset);
 
     const nrd::Denoiser GetDenoiser() const
     {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -17,57 +17,29 @@
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/Scene.h>
 #include <donut/engine/View.h>
+#include <donut/render/DLSS.h>
 
 #include "PathtracerUi.h"
-
-// Unified Binding
-struct DescriptorSetIDs
-{
-    enum
-    {
-        Globals,
-        Denoiser,
-        Nrc,
-        Sharc,
-        Bindless,
-        COUNT
-    };
-};
+#include "PathtracerPipelines.h"
+#include "AccelStructManager.h"
+#include "PathtracerScene.h"
+#include "RenderTargets.h"
 
 #if ENABLE_NRD
-#include "RenderTargets.h"
 #include "NrdIntegration.h"
 #endif // ENABLE_NRD
 
-class ScopedMarker
-{
-public:
-    ScopedMarker(nvrhi::ICommandList* commandList, const char* name) : m_commandList(commandList)
-    {
-        m_commandList->beginMarker(name);
-    }
-    ~ScopedMarker()
-    {
-        m_commandList->endMarker();
-    }
-
-private:
-    nvrhi::ICommandList* m_commandList;
-};
 
 class Pathtracer : public donut::app::ApplicationBase
 {
 public:
     using ApplicationBase::ApplicationBase;
 
-    struct PipelinePermutation
-    {
-        nvrhi::ShaderLibraryHandle shaderLibrary;
-        nvrhi::rt::PipelineHandle pipeline;
-        nvrhi::rt::ShaderTableHandle shaderTable;
-    };
-
     Pathtracer(donut::app::DeviceManager* deviceManager, UIData& ui, nvrhi::GraphicsAPI api);
+    Pathtracer(const Pathtracer&) = delete;
+    Pathtracer& operator=(const Pathtracer&) = delete;
+    Pathtracer(Pathtracer&&) = delete;
+    Pathtracer& operator=(Pathtracer&&) = delete;
     virtual ~Pathtracer();
 
     bool Init(int argc, const char* const* argv);
@@ -84,8 +56,6 @@ public:
 
     void CopyActiveCameraToFirstPerson();
 
-    void EnableAnimations();
-    void DisableAnimations();
     void Animate(float fElapsedTimeSeconds) override;
 
     bool KeyboardUpdate(int key, int scancode, int action, int mods) override;
@@ -94,16 +64,12 @@ public:
     bool MouseButtonUpdate(int button, int action, int mods) override;
     bool MouseScrollUpdate(double xoffset, double yoffset) override;
 
-    bool CreateRayTracingPipeline(donut::engine::ShaderFactory& shaderFactory, PipelinePermutation& pipelinePermutation, std::vector<donut::engine::ShaderMacro>& pipelineMacros);
+    void CreateCommonPipelines();
     bool CreateRayTracingPipelines();
 
 #if ENABLE_NRC
     NrcIntegration* GetNrcInstance() const;
 #endif
-
-    void GetMeshBlasDesc(donut::engine::MeshInfo& mesh, nvrhi::rt::AccelStructDesc& blasDesc, bool skipTransmissiveMaterials) const;
-    void CreateAccelStructs(nvrhi::ICommandList* commandList);
-    void BuildTLAS(nvrhi::ICommandList* commandList, uint32_t frameIndex) const;
 
     void BackBufferResizing() override;
 
@@ -111,7 +77,6 @@ public:
 
     std::shared_ptr<donut::engine::ShaderFactory> GetShaderFactory();
     std::shared_ptr<donut::vfs::IFileSystem> GetRootFS() const;
-
     std::shared_ptr<donut::engine::TextureCache> GetTextureCache();
 
     void RebuildAccelerationStructure();
@@ -122,25 +87,10 @@ public:
     std::string GetResolutionInfo();
 
 private:
+    PathtracerPipelines::BindingLayouts BuildBindingLayouts() const;
+
     std::shared_ptr<donut::vfs::RootFileSystem> m_rootFileSystem;
     std::shared_ptr<donut::vfs::NativeFileSystem> m_nativeFileSystem;
-
-    enum PipelineType
-    {
-        DefaultPathTracing,
-#if ENABLE_NRC
-        NRC_Update,
-        NRC_Query,
-#endif // ENABLE_NRC
-#if ENABLE_SHARC
-        Sharc_Update,
-        Sharc_Query,
-#endif // ENABLE_SHARC
-        Count
-    };
-
-    std::vector<donut::engine::ShaderMacro> m_pipelineMacros[PipelineType::Count];
-    PipelinePermutation m_pipelinePermutations[PipelineType::Count];
 
     nvrhi::CommandListHandle m_commandList;
     nvrhi::BindingLayoutHandle m_globalBindingLayout;
@@ -150,11 +100,6 @@ private:
     nvrhi::GraphicsPipelineHandle m_tonemappingPSO;
     nvrhi::BindingLayoutHandle m_tonemappingBindingLayout;
     nvrhi::BindingSetHandle m_tonemappingBindingSet;
-    nvrhi::ShaderHandle m_tonemappingPS;
-
-    nvrhi::rt::AccelStructHandle m_topLevelAS;
-    bool m_rebuildAS = true;
-    int m_cameraIndex = -1;
 
     nvrhi::BufferHandle m_constantBuffer;
     nvrhi::BufferHandle m_debugBuffer;
@@ -162,34 +107,30 @@ private:
     std::shared_ptr<donut::engine::ShaderFactory> m_shaderFactory;
     std::shared_ptr<donut::engine::DescriptorTableManager> m_descriptorTable;
 
-    std::vector<std::string> m_sceneFilesAvailable;
-    std::string m_currentSceneName;
-    std::shared_ptr<donut::engine::Scene> m_scene;
-
     nvrhi::TextureHandle m_accumulationBuffer;
-    nvrhi::TextureHandle m_pathTracerOutputBuffer;
 
     donut::app::FirstPersonCamera m_camera;
     donut::engine::PlanarView m_view;
     donut::engine::PlanarView m_viewPrevious;
 
-    std::shared_ptr<donut::engine::DirectionalLight> m_sunLight;
-    std::shared_ptr<donut::engine::PointLight> m_headLight;
-
     std::unique_ptr<donut::engine::BindingCache> m_bindingCache;
 
-    bool m_enableAnimations = false;
     float m_wallclockTime = 0.0f;
     int m_frameIndex = 0;
 
     UIData& m_ui;
 
-    dm::affine3 m_prevViewMatrix;
     bool m_resetAccumulation;
-    bool m_sceneReloaded;
     uint32_t m_accumulatedFrameCount;
 
     nvrhi::GraphicsAPI m_api;
+
+    float m_renderScale = 1.0f;
+    std::unique_ptr<RenderTargets> m_renderTargets;
+
+    std::unique_ptr<AccelStructManager> m_accelStructManager;
+    std::unique_ptr<PathtracerScene> m_pathtracerScene;
+    std::unique_ptr<PathtracerPipelines> m_pathtracerPipelines;
 
 #if ENABLE_NRC
     std::unique_ptr<NrcIntegration> m_nrc;
@@ -211,23 +152,19 @@ private:
 
     nvrhi::BindingLayoutHandle m_sharcBindingLayout;
     nvrhi::BindingSetHandle m_sharcBindingSet;
-    nvrhi::ShaderHandle m_sharcResolveCS;
-    nvrhi::ComputePipelineHandle m_sharcResolvePSO;
 #endif // ENABLE_SHARC
 
-#if ENABLE_NRD
     nvrhi::BindingLayoutHandle m_denoiserBindingLayout;
     nvrhi::BindingSetHandle m_denoiserBindingSet;
     nvrhi::BindingSetHandle m_denoiserOutBindingSet;
-    nvrhi::ShaderHandle m_denoiserReblurPackCS;
-    nvrhi::ComputePipelineHandle m_denoiserReblurPackPSO;
-    nvrhi::ShaderHandle m_denoiserReblurPack_NRC_CS;
-    nvrhi::ComputePipelineHandle m_denoiserReblurPack_NRC_PSO;
-    nvrhi::ShaderHandle m_denoiserResolveCS;
-    nvrhi::ComputePipelineHandle m_denoiserResolvePSO;
-    std::unique_ptr<RenderTargets> m_renderTargets;
+
+#if ENABLE_NRD
     std::unique_ptr<NrdIntegration> m_nrd;
 #endif // ENABLE_NRD
+
+#if DONUT_WITH_DLSS
+    std::unique_ptr<donut::render::DLSS> m_dlss;
+#endif
 
     // Unified Binding
     nvrhi::BindingLayoutHandle m_dummyLayouts[DescriptorSetIDs::COUNT];

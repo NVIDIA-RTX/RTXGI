@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -47,7 +47,7 @@ PathtracerUI::PathtracerUI(DeviceManager* deviceManager, Pathtracer& app, UIData
     m_commandList = GetDevice()->createCommandList();
 
     std::shared_ptr<donut::vfs::NativeFileSystem> nativeFS = std::make_shared<donut::vfs::NativeFileSystem>();
-    m_fontDroidMono = this->CreateFontFromFile(*nativeFS, GetDirectoryWithExecutable().parent_path() / "Assets" / "Media/Fonts/DroidSans/DroidSans-Mono.ttf", 16.0f);
+    m_defaultFont = this->CreateFontFromFile(*nativeFS, GetDirectoryWithExecutable().parent_path() / "Assets" / "Media/Fonts/NVIDIASans/NVIDIASans_Rg.ttf", 24.0f);
 
     ImGui::GetIO().IniFilename = nullptr;
 }
@@ -61,22 +61,23 @@ void PathtracerUI::buildUI(void)
     if (!m_ui.showUI)
         return;
 
-    const auto& io = ImGui::GetIO();
-
-    int width, height;
-    GetDeviceManager()->GetWindowDimensions(width, height);
-
     if (m_app.IsSceneLoading())
     {
         BeginFullScreenWindow();
 
-        ImGui::PushFont(m_fontDroidMono->GetScaledFont());
+        ImGui::PushFont(m_defaultFont->GetScaledFont(), 16.0f);
 
         char messageBuffer[256];
         const auto& stats = Scene::GetLoadingStats();
-        snprintf(messageBuffer, std::size(messageBuffer), "Loading scene %s, please wait...\nObjects: %d/%d, Textures: %d/%d", m_app.GetCurrentSceneName().c_str(),
-                 stats.ObjectsLoaded.load(), stats.ObjectsTotal.load(), m_app.GetTextureCache()->GetNumberOfLoadedTextures(),
-                 m_app.GetTextureCache()->GetNumberOfRequestedTextures());
+        snprintf(
+            messageBuffer,
+            std::size(messageBuffer),
+            "Loading scene %s, please wait...\nObjects: %d/%d, Textures: %d/%d",
+            m_app.GetCurrentSceneName().c_str(),
+            stats.ObjectsLoaded.load(),
+            stats.ObjectsTotal.load(),
+            m_app.GetTextureCache()->GetNumberOfLoadedTextures(),
+            m_app.GetTextureCache()->GetNumberOfRequestedTextures());
 
         DrawScreenCenteredText(messageBuffer);
 
@@ -87,18 +88,15 @@ void PathtracerUI::buildUI(void)
         return;
     }
 
-    ImGui::PushFont(m_fontDroidMono->GetScaledFont());
+    ImGui::PushFont(m_defaultFont->GetScaledFont(), 16.0f);
 
     bool updateAccum = false;
     bool updateAccelerationStructure = false;
 
-    ImGui::Begin("Settings", 0, ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::SetWindowPos(ImVec2(1.0f, 1.0f));
+    ImGui::Begin("Settings", 0, ImGuiWindowFlags_None);
+    ImGui::SetWindowPos(ImVec2(5.0f, 5.0f));
+    ImGui::SetWindowSize(ImVec2(0.0f, 800.0f), ImGuiCond_FirstUseEver);
     ImGui::StyleColorsDark();
-    ImGuiStyle* style = &ImGui::GetStyle();
-    ImVec4* colors = style->Colors;
-    for (int i = 0; i < (int)ImGuiCol_COUNT; ++i)
-        srgb_to_linear(colors[i]);
 
     ImGui::Text("%s, %s", GetDeviceManager()->GetRendererString(), m_app.GetResolutionInfo().c_str());
     double frameTime = GetDeviceManager()->GetAverageFrameTimeSeconds();
@@ -114,7 +112,6 @@ void PathtracerUI::buildUI(void)
             float3 cameraPosition = m_app.GetCamera()->GetPosition();
             ImGui::Text("Camera (%0.2f, %0.2f, %0.2f)", cameraPosition.x, cameraPosition.y, cameraPosition.z);
 #endif
-
             const std::string currentScene = m_app.GetCurrentSceneName();
             if (ImGui::BeginCombo("Scene", currentScene.c_str()))
             {
@@ -133,20 +130,10 @@ void PathtracerUI::buildUI(void)
 
             ImGui::Checkbox("VSync", &m_ui.enableVSync);
             ImGui::SameLine();
-            updateAccum |= ImGui::Checkbox("Jitter", &m_ui.enableJitter);
+            ImGui::Checkbox("Animations", &m_ui.enableAnimations);
             ImGui::SameLine();
-            updateAccum |= ImGui::Checkbox("Russian Roulette", &m_ui.enableRussianRoulette);
-            ImGui::SameLine();
-            updateAccum |= ImGui::Checkbox("Transmission", &m_ui.enableTransmission);
-            ImGui::SameLine();
-
-            if (ImGui::Checkbox("Animations", &m_ui.enableAnimations))
-            {
-                if (m_ui.enableAnimations)
-                    m_app.EnableAnimations();
-                else
-                    m_app.DisableAnimations();
-            }
+            if (ImGui::Button("Reload Shaders"))
+                m_ui.reloadShaders = true;
         }
         ImGui::Indent(-12.0f);
     }
@@ -156,6 +143,16 @@ void PathtracerUI::buildUI(void)
     {
         ImGui::Indent(12.0f);
         {
+            updateAccum |= ImGui::Checkbox("Jitter", &m_ui.enableJitter);
+            ImGui::SameLine();
+            updateAccum |= ImGui::Checkbox("Russian Roulette", &m_ui.enableRussianRoulette);
+            ImGui::SameLine();
+            updateAccum |= ImGui::Checkbox("Transmission", &m_ui.enableTransmission);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
             ImGui::Text("Mode:");
             ImGui::SameLine();
             if (ImGui::RadioButton("Reference", (m_ui.techSelection == TechSelection::None)))
@@ -173,7 +170,7 @@ void PathtracerUI::buildUI(void)
                 updateAccum = true;
             }
             ImGui::EndDisabled();
-#endif
+#endif // ENABLE_NRC
 
 #if ENABLE_SHARC
             ImGui::SameLine();
@@ -182,30 +179,56 @@ void PathtracerUI::buildUI(void)
                 m_ui.techSelection = TechSelection::Sharc;
                 updateAccum = true;
             }
-#endif
+#endif // ENABLE_SHARC
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            if (m_ui.dlssSupported)
+            {
+                // DLSS quality modes
+                updateAccum |= ImGui::Combo("DLSS Mode", (int*)&m_ui.dlssMode, m_ui.dlssModeStrings);
+            }
 
             ImGui::Text("Denoiser:");
             ImGui::SameLine();
-            if (ImGui::RadioButton("None", m_ui.denoiserSelection == DenoiserSelection::None))
+            if (ImGui::RadioButton("None", m_ui.denoiserType == DenoiserType::None))
             {
-                m_ui.denoiserSelection = DenoiserSelection::None;
+                m_ui.denoiserType = DenoiserType::None;
                 updateAccum = true;
             }
             ImGui::SameLine();
-            if (ImGui::RadioButton("Accumulation", m_ui.denoiserSelection == DenoiserSelection::Accumulation))
+            ImGui::BeginDisabled(m_ui.dlssMode != DlssMode::None);
+            if (ImGui::RadioButton("Accumulation", m_ui.denoiserType == DenoiserType::Accumulation))
             {
-                m_ui.denoiserSelection = DenoiserSelection::Accumulation;
-                // m_ui.enableAccumulation = true;
+                m_ui.denoiserType = DenoiserType::Accumulation;
                 updateAccum = true;
             }
+            ImGui::EndDisabled();
 #if ENABLE_NRD
             ImGui::SameLine();
-            if (ImGui::RadioButton("NRD", m_ui.denoiserSelection == DenoiserSelection::Nrd))
+            if (ImGui::RadioButton("NRD", m_ui.denoiserType == DenoiserType::Nrd))
             {
-                m_ui.denoiserSelection = DenoiserSelection::Nrd;
+                m_ui.denoiserType = DenoiserType::Nrd;
                 updateAccum = true;
             }
-#endif
+#endif // ENABLE_NRD
+            if (m_ui.dlssSupported && m_ui.dlssRayReconstructionSupported)
+            {
+                ImGui::BeginDisabled(m_ui.dlssMode == DlssMode::None);
+                ImGui::SameLine();
+                if (ImGui::RadioButton("DLSS RR", m_ui.denoiserType == DenoiserType::Dlssrr))
+                {
+                    m_ui.denoiserType = DenoiserType::Dlssrr;
+                    updateAccum = true;
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                ImGui::EndDisabled();
+            }
 
             updateAccum |= ImGui::SliderInt("Bounces", &m_ui.bouncesMax, 1, 24);
             updateAccum |= ImGui::SliderInt("Samples Per Pixel", &m_ui.samplesPerPixel, 1, 16);
@@ -235,13 +258,8 @@ void PathtracerUI::buildUI(void)
             updateAccum |= ImGui::Checkbox("Learn Irradiance", &m_ui.nrcLearnIrradiance);
             updateAccum |= ImGui::Checkbox("Include Direct Illumination", &m_ui.nrcIncludeDirectIllumination);
             updateAccum |= ImGui::Checkbox("Skip delta vertices", &m_ui.nrcSkipDeltaVertices);
-            updateAccum |= ImGui::SliderFloat("Self-Training Attenuation", &m_ui.nrcSelfTrainingAttenuation, 0.0f, 1.0f, "%.3f");
             updateAccum |= ImGui::SliderFloat("Heuristic Threshold", &m_ui.nrcTerminationHeuristicThreshold, 0.0f, 0.25f, "%.3f");
             updateAccum |= ImGui::SliderInt("Num Training Iterations", &m_ui.nrcNumTrainingIterations, 1, 4);
-            updateAccum |= ImGui::SliderFloat("Primary segments to train on", &m_ui.nrcProportionPrimarySegmentsToTrainOn, 0.0f, 1.0f, "%.2f");
-            updateAccum |= ImGui::SliderFloat("Tertiary+ segments to train on", &m_ui.nrcProportionTertiaryPlusSegmentsToTrainOn, 0.0f, 1.0f, "%.2f");
-            updateAccum |= ImGui::SliderFloat("Proportion unbiased", &m_ui.nrcProportionUnbiased, 0.0f, 1.0f, "%.2f");
-            updateAccum |= ImGui::SliderFloat("Unbiased self-training", &m_ui.nrcProportionUnbiasedToSelfTrain, 0.0f, 1.0f, "%.2f");
             updateAccum |= ImGui::SliderFloat("Max Average Radiance Value", &m_ui.nrcMaxAverageRadiance, 0.001f, 1000.0f);
             updateAccum |= ImGui::Combo("Resolve Mode", (int*)&m_ui.nrcResolveMode, nrc::GetImGuiResolveModeComboString());
         }
@@ -263,8 +281,8 @@ void PathtracerUI::buildUI(void)
             updateAccum |= ImGui::Checkbox("Update View Camera", &m_ui.sharcUpdateViewCamera);
             updateAccum |= ImGui::Checkbox("Enable Material Demodulation", &m_ui.sharcEnableMaterialDemodulation);
             updateAccum |= ImGui::Checkbox("Enable Debug", &m_ui.sharcEnableDebug);
-            updateAccum |= ImGui::SliderInt("Accumulation Frame Number", &m_ui.sharcAccumulationFrameNum, 1, 30);
-            updateAccum |= ImGui::SliderInt("Stale Frame Number", &m_ui.sharcStaleFrameFrameNum, 1, 128);
+            updateAccum |= ImGui::SliderInt("Accumulation Frame Number", &m_ui.sharcAccumulationFrameNum, 1, 120);
+            updateAccum |= ImGui::SliderInt("Stale Frame Number", &m_ui.sharcStaleFrameFrameNum, 1, 120);
             updateAccum |= ImGui::SliderInt("Downscale Factor", &m_ui.sharcDownscaleFactor, 1, 10);
             updateAccum |= ImGui::SliderFloat("Scene Scale", &m_ui.sharcSceneScale, 5.0f, 100.0f);
             updateAccum |= ImGui::SliderFloat("Rougness Threshold", &m_ui.sharcRoughnessThreshold, 0.0f, 1.0f);

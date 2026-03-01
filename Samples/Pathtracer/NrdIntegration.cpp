@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -327,27 +327,26 @@ static inline void MatrixToNrd(float* dest, const dm::float4x4& m)
     memcpy(dest, &m, sizeof(m));
 }
 
-void NrdIntegration::RunDenoiserPasses(nvrhi::ICommandList* commandList,
-                                       const RenderTargets& renderTargets,
-                                       int pass,
-                                       const donut::engine::PlanarView& view,
-                                       const donut::engine::PlanarView& viewPrev,
-                                       uint32_t frameIndex,
-                                       float disocclusionThreshold,
-                                       float disocclusionThresholdAlternate,
-                                       bool useDisocclusionThresholdAlternateMix,
-                                       bool enableValidation,
-                                       const void* methodSettings,
-                                       bool reset)
+void NrdIntegration::RunDenoiserPasses(
+    nvrhi::ICommandList* commandList,
+    const RenderTargets& renderTargets,
+    int pass,
+    const donut::engine::PlanarView& view,
+    const donut::engine::PlanarView& viewPrev,
+    uint32_t frameIndex,
+    float disocclusionThreshold,
+    float disocclusionThresholdAlternate,
+    bool useDisocclusionThresholdAlternateMix,
+    bool enableValidation,
+    const void* methodSettings,
+    bool reset)
 {
     if (methodSettings)
         nrd::SetDenoiserSettings(*m_instance, m_identifier, methodSettings);
 
     nrd::CommonSettings commonSettings;
-    MatrixToNrd(commonSettings.worldToViewMatrix, dm::affineToHomogeneous(view.GetViewMatrix())); // MatrixToNrd(commonSettings.worldToViewRotationMatrix,
-                                                                                                  // dm::affineToHomogeneous(view.GetViewMatrix()));
-    MatrixToNrd(commonSettings.worldToViewMatrixPrev, dm::affineToHomogeneous(viewPrev.GetViewMatrix())); // MatrixToNrd(commonSettings.worldToViewRotationMatrixPrev,
-                                                                                                          // dm::affineToHomogeneous(viewPrev.GetViewMatrix()));
+    MatrixToNrd(commonSettings.worldToViewMatrix, dm::affineToHomogeneous(view.GetViewMatrix()));
+    MatrixToNrd(commonSettings.worldToViewMatrixPrev, dm::affineToHomogeneous(viewPrev.GetViewMatrix()));
     MatrixToNrd(commonSettings.viewToClipMatrix, view.GetProjectionMatrix(false));
     MatrixToNrd(commonSettings.viewToClipMatrixPrev, viewPrev.GetProjectionMatrix(false));
 
@@ -419,25 +418,25 @@ void NrdIntegration::RunDenoiserPasses(nvrhi::ICommandList* commandList,
                 switch (resource.type)
                 {
                 case nrd::ResourceType::IN_MV:
-                    texture = renderTargets.denoiserMotionVectors;
+                    texture = renderTargets.motionVectors;
                     break;
                 case nrd::ResourceType::IN_NORMAL_ROUGHNESS:
-                    texture = renderTargets.denoiserNormalRoughness;
+                    texture = renderTargets.normalRoughness;
                     break;
                 case nrd::ResourceType::IN_VIEWZ:
-                    texture = renderTargets.denoiserViewSpaceZ;
+                    texture = renderTargets.depth;
                     break;
                 case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST:
-                    texture = renderTargets.denoiserInSpecRadianceHitDist;
+                    texture = renderTargets.inSpecRadianceHitDist;
                     break;
                 case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST:
-                    texture = renderTargets.denoiserInDiffRadianceHitDist;
+                    texture = renderTargets.inDiffRadianceHitDist;
                     break;
                 case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST:
-                    texture = renderTargets.denoiserOutSpecRadianceHitDist;
+                    texture = renderTargets.outSpecRadianceHitDist;
                     break;
                 case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST:
-                    texture = renderTargets.denoiserOutDiffRadianceHitDist;
+                    texture = renderTargets.outDiffRadianceHitDist;
                     break;
                 case nrd::ResourceType::TRANSIENT_POOL:
                     texture = m_transientTextures[resource.indexInPool];

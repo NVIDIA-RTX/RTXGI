@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2023-2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # NVIDIA CORPORATION and its licensors retain all intellectual property
 # and proprietary rights in and to this software, related documentation
@@ -20,7 +20,9 @@ set(CMAKE_CXX_EXTENSIONS ON)
 
 # Set MSVC debug level
 if(MSVC)
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_ITERATOR_DEBUG_LEVEL=1")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_ITERATOR_DEBUG_LEVEL=2")
+    #set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
+    #set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MDd")
     set (CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
@@ -67,6 +69,10 @@ set(DXC_SPIRV_PATH "${CMAKE_CURRENT_SOURCE_DIR}/External/dxc/bin/x64/dxc.exe")
 option(USE_RAY_TRACING_DENOISER "Include NRD as part of the sample." ON)
 set(NRD_PATH "${CMAKE_CURRENT_SOURCE_DIR}/External/RayTracingDenoiser")
 
+# Enable DLSS support
+unset(DONUT_WITH_DLSS CACHE)
+option(DONUT_WITH_DLSS "" ON)
+
 # Setup asset importer support
 option(DONUT_WITH_ASSIMP "" OFF)
 
@@ -76,7 +82,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 set(DONUT_SHADERS_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework")
-
 
 # Setup option for local NRC library development
 set(NRC_CUSTOM_DISTRO_PATH "" CACHE PATH "Enter the path to NRC distro directory containing lib, include, and bin.")
@@ -117,7 +122,6 @@ if(NVRHI_WITH_VULKAN OR NVRHI_WITH_DX12)
     # Set Pathtracer sample project as a startup project
 	set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Pathtracer)
 endif()
-
 
 # Add SHARC includes to the solution
 set(SHARC_LIBRARY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/Sharc")

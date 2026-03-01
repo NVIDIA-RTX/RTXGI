@@ -10,16 +10,14 @@
 
 #pragma once
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN // Exclude rarely-used items from Windows headers.
-#endif
+#include <donut/app/ApplicationBase.h>
 
-#include <Windows.h>
-#include <string>
-
-namespace NrcUtils
+class ScopedMarker
 {
-void Validate(HRESULT hr, LPWSTR message);
+public:
+    ScopedMarker(nvrhi::ICommandList* commandList, const char* name);
+    ~ScopedMarker();
 
-std::wstring StringToWstring(const std::string& wstr);
-} // namespace NrcUtils
+private:
+    nvrhi::ICommandList* m_commandList;
+};

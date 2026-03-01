@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -16,9 +16,9 @@
 #include <donut/app/imgui_renderer.h>
 #include <donut/app/imgui_console.h>
 
-#define ENABLE_NRC 1
+#define ENABLE_NRC   1
 #define ENABLE_SHARC 1
-#define ENABLE_NRD 1
+#define ENABLE_NRD   1
 
 #if ENABLE_NRC
 #include "NrcIntegration.h"
@@ -28,34 +28,58 @@ enum class PTDebugOutputType : uint32_t
 {
     None = 0,
     DiffuseReflectance = 1,
-    WorldSpaceNormals = 2,
-    WorldSpacePosition = 3,
-    Barycentrics = 4,
-    HitT = 5,
-    InstanceID = 6,
-    Emissives = 7,
-    BounceHeatmap = 8,
+    SpecularReflectance = 2,
+    WorldSpaceNormals = 3,
+    WorldSpacePosition = 4,
+    Barycentrics = 5,
+    HitT = 6,
+    InstanceID = 7,
+    Emissives = 8,
+    BounceHeatmap = 9,
 };
+
+enum class DlssMode : uint32_t
+{
+    None = 0,
+    UltraPerformance = 1,
+    Performance = 2,
+    Balanced = 3,
+    Quality = 4,
+    DLAA = 5,
+};
+
+constexpr float GetDlssModeScale(DlssMode dlssMode)
+{
+    switch (dlssMode)
+    {
+    case DlssMode::UltraPerformance:
+        return 1 / 3.0f;
+    case DlssMode::Performance:
+        return 0.5f;
+    case DlssMode::Balanced:
+        return 1 / 1.68f;
+    case DlssMode::Quality:
+        return 1 / 1.5f;
+    case DlssMode::DLAA:
+        return 1.0f;
+    }
+
+    return 1.0f;
+}
 
 enum class TechSelection : uint32_t
 {
     None = 0,
-#if ENABLE_NRC
     Nrc = 1,
-#endif
-#if ENABLE_SHARC
     Sharc = 2,
-#endif
 };
 
-
-enum class DenoiserSelection : uint32_t
+enum class DenoiserType : uint32_t
 {
     None = 0,
     Accumulation = 1,
-#if ENABLE_NRD
     Nrd = 2,
-#endif
+    Dlssrr = 3,
 };
 
 enum class ToneMappingOperator : uint32_t
@@ -93,9 +117,10 @@ struct UIData
     int samplesPerPixel = 1;
     int targetLight = 0;
     bool enableTonemapping = true;
+    bool reloadShaders = false;
 
     TechSelection techSelection = TechSelection::None;
-    DenoiserSelection denoiserSelection = DenoiserSelection::Accumulation;
+    DenoiserType denoiserType = DenoiserType::Accumulation;
     bool enableDenoiser = false;
 
     ToneMappingOperator toneMappingOperator = ToneMappingOperator::Reinhard;
@@ -110,12 +135,6 @@ struct UIData
     bool nrcCalculateTrainingLoss = false;
     float nrcMaxAverageRadiance = 1.0f;
     NrcResolveMode nrcResolveMode = NrcResolveMode::AddQueryResultToOutput;
-    // TODO: Following settings will not be exposed
-    float nrcProportionPrimarySegmentsToTrainOn = 0.02f;
-    float nrcProportionTertiaryPlusSegmentsToTrainOn = 1.0f;
-    float nrcProportionUnbiasedToSelfTrain = 1.0f;
-    float nrcProportionUnbiased = 1.0f / 16.0f;
-    float nrcSelfTrainingAttenuation = 1.0f;
 
     uint32_t nrcTrainingWidth = 0;
     uint32_t nrcTrainingHeight = 0;
@@ -136,16 +155,23 @@ struct UIData
     bool sharcEnableDebug = false;
     int sharcDownscaleFactor = 5;
     float sharcSceneScale = 50.0f;
-    int sharcAccumulationFrameNum = 10;
-    int sharcStaleFrameFrameNum = 64;
+    int sharcAccumulationFrameNum = 20;
+    int sharcStaleFrameFrameNum = 60;
     float sharcRoughnessThreshold = 0.4f;
 #endif // ENABLE_SHARC
+
+    bool dlssSupported = false;
+    bool dlssRayReconstructionSupported = false;
 
     std::shared_ptr<donut::engine::Material> selectedMaterial = nullptr;
     std::shared_ptr<donut::engine::SceneCamera> activeSceneCamera = nullptr;
 
     PTDebugOutputType ptDebugOutput = PTDebugOutputType::None;
-    const char* ptDebugOutputTypeStrings = "None\0Diffuse Reflectance\0Worldspace Normals\0Worldspace Position\0Barycentrics\0HitT\0InstanceID\0Emissives\0Bounce Heatmap\0";
+    const char* ptDebugOutputTypeStrings =
+        "None\0Diffuse Reflectance\0Specular Reflectance\0Worldspace Normals\0Worldspace Position\0Barycentrics\0HitT\0InstanceID\0Emissives\0Bounce Heatmap\0";
+
+    DlssMode dlssMode = DlssMode::None;
+    const char* dlssModeStrings = "None\0Ultra Performance\0Performance\0Balanced\0Quality\0DLAA\0";
 };
 
 class PathtracerUI : public donut::app::ImGui_Renderer
@@ -160,8 +186,6 @@ protected:
 private:
     class Pathtracer& m_app;
     UIData& m_ui;
-
-    std::shared_ptr<donut::app::RegisteredFont> m_fontDroidMono;
 
     std::shared_ptr<donut::engine::Light> m_selectedLight;
     int m_selectedLightIndex = 0;

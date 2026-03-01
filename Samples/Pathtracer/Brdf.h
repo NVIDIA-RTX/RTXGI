@@ -19,22 +19,22 @@ This work is published from: Germany. */
 #define NONE 0
 
 // NDF definitions
-#define GGX 1
+#define GGX      1
 #define BECKMANN 2
 
 // Specular BRDFs
 #define MICROFACET 1
-#define PHONG 2
+#define PHONG      2
 
 // Diffuse BRDFs
 #define LAMBERTIAN 1
 #define OREN_NAYAR 2
-#define DISNEY 3
-#define FROSTBITE 4
+#define DISNEY     3
+#define FROSTBITE  4
 
 // BRDF types
-#define DIFFUSE_TYPE 1
-#define SPECULAR_TYPE 2
+#define DIFFUSE_TYPE      1
+#define SPECULAR_TYPE     2
 #define TRANSMISSIVE_TYPE 3
 
 // PIs
@@ -128,7 +128,7 @@ This work is published from: Germany. */
 
 // Select default specular and diffuse BRDF functions
 #if SPECULAR_BRDF == MICROFACET
-#define evalSpecular evalMicrofacet
+#define evalSpecular   evalMicrofacet
 #define sampleSpecular sampleSpecularMicrofacet
 #if MICROFACET_DISTRIBUTION == GGX
 #define sampleSpecularHalfVector sampleGGXVNDF
@@ -136,21 +136,21 @@ This work is published from: Germany. */
 #define sampleSpecularHalfVector sampleBeckmannWalter
 #endif
 #elif SPECULAR_BRDF == PHONG
-#define evalSpecular evalPhong
-#define sampleSpecular sampleSpecularPhong
+#define evalSpecular             evalPhong
+#define sampleSpecular           sampleSpecularPhong
 #define sampleSpecularHalfVector samplePhong
 #else
-#define evalSpecular evalVoid
-#define sampleSpecular sampleSpecularVoid
+#define evalSpecular             evalVoid
+#define sampleSpecular           sampleSpecularVoid
 #define sampleSpecularHalfVector sampleSpecularHalfVectorVoid
 #endif
 
 #if MICROFACET_DISTRIBUTION == GGX
 #define specularSampleWeight specularSampleWeightGGXVNDF
-#define specularPdf sampleGGXVNDFReflectionPdf
+#define specularPdf          sampleGGXVNDFReflectionPdf
 #else
 #define specularSampleWeight specularSampleWeightBeckmannWalter
-#define specularPdf sampleBeckmannWalterReflectionPdf
+#define specularPdf          sampleBeckmannWalterReflectionPdf
 #endif
 
 #if DIFFUSE_BRDF == LAMBERTIAN
@@ -166,9 +166,9 @@ This work is published from: Germany. */
 #define evalDiffuse evalFrostbiteDisneyDiffuse
 #define diffuseTerm frostbiteDisneyDiffuse
 #else
-#define evalDiffuse evalVoid
+#define evalDiffuse         evalVoid
 #define evalIndirectDiffuse evalIndirectVoid
-#define diffuseTerm none
+#define diffuseTerm         none
 #endif
 
 // -------------------------------------------------------------------------
@@ -201,8 +201,8 @@ struct BrdfData
     float3 diffuseReflectance;
 
     // Roughnesses
-    float roughness; //< perceptively linear roughness (artist's input)
-    float alpha; //< linear roughness - often 'alpha' in specular BRDF equations
+    float roughness;    //< perceptively linear roughness (artist's input)
+    float alpha;        //< linear roughness - often 'alpha' in specular BRDF equations
     float alphaSquared; //< alpha squared - pre-calculated value commonly used in BRDF equations
 
     // Commonly used terms for BRDF evaluation
@@ -1000,29 +1000,31 @@ float3 evalCombinedBRDF(float3 N, float3 L, float3 V, MaterialSample material)
 // This is an entry point for evaluation of all other BRDFs based on selected configuration (for indirect light)
 
 #if ORIGINAL_VERSION
-bool evalIndirectCombinedBRDF(float2 u,
-                              float3 shadingNormal,
-                              float3 geometryNormal,
-                              float3 V,
-                              MaterialProperties material,
-                              const int brdfType,
-                              OUT_PARAMETER(float3) rayDirection,
-                              OUT_PARAMETER(float3) sampleWeight,
-                              OUT_PARAMETER(float3) pdf)
+bool evalIndirectCombinedBRDF(
+    float2 u,
+    float3 shadingNormal,
+    float3 geometryNormal,
+    float3 V,
+    MaterialProperties material,
+    const int brdfType,
+    OUT_PARAMETER(float3) rayDirection,
+    OUT_PARAMETER(float3) sampleWeight,
+    OUT_PARAMETER(float3) pdf)
 {
 #else // Divergence introduced here due to type mismatch of the last parameter 'pdf'
 // bool evalIndirectCombinedBRDF(float2 u, float3 shadingNormal, float3 geometryNormal, float3 V, MaterialProperties material, const int brdfType, OUT_PARAMETER(float3)
 // rayDirection, OUT_PARAMETER(float3) sampleWeight, OUT_PARAMETER(float) pdf) {
-bool evalIndirectCombinedBRDF(float2 u,
-                              float3 shadingNormal,
-                              float3 geometryNormal,
-                              float3 V,
-                              MaterialSample material,
-                              const int brdfType,
-                              const float refractiveIndex,
-                              OUT_PARAMETER(float3) rayDirection,
-                              OUT_PARAMETER(float3) sampleWeight,
-                              OUT_PARAMETER(float) pdf)
+bool evalIndirectCombinedBRDF(
+    float2 u,
+    float3 shadingNormal,
+    float3 geometryNormal,
+    float3 V,
+    MaterialSample material,
+    const int brdfType,
+    const float refractiveIndex,
+    OUT_PARAMETER(float3) rayDirection,
+    OUT_PARAMETER(float3) sampleWeight,
+    OUT_PARAMETER(float) pdf)
 {
 
 #endif

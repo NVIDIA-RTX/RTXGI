@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -100,29 +100,28 @@ void resolve(in uint2 did : SV_DispatchThreadID)
 {
     float4 outputColor = u_OutputEmissive[did];
     float viewSpaceZ = u_OutputViewSpaceZ[did];
+    if (viewSpaceZ == 0)
+        return;
 
-    if (viewSpaceZ != 0)
+    // Diffuse
     {
-        // Diffuse
-        {
-            float4 diffuseData = u_OutputDiffuseHitDistance[did];
-            float3 diffuseAlbedo = u_OutputDiffuseAlbedo[did].xyz;
-            diffuseData = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(diffuseData);
+        float4 diffuseData = u_OutputDiffuseHitDistance[did];
+        float3 diffuseAlbedo = u_OutputDiffuseAlbedo[did].xyz;
+        diffuseData = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(diffuseData);
 
-            outputColor.xyz += diffuseData.xyz * diffuseAlbedo;
-        }
+        outputColor.xyz += diffuseData.xyz * diffuseAlbedo;
+    }
 
 #if ENABLE_SPECULAR_LOBE
-        // Specular
-        {
-            float4 specularData = u_OutputSpecularHitDistance[did];
-            float3 specularAlbedo = u_OutputSpecularAlbedo[did].xyz;
-            specularData = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(specularData);
+    // Specular
+    {
+        float4 specularData = u_OutputSpecularHitDistance[did];
+        float3 specularAlbedo = u_OutputSpecularAlbedo[did].xyz;
+        specularData = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(specularData);
 
-            outputColor.xyz += specularData.xyz * specularAlbedo;
-        }
+        outputColor.xyz += specularData.xyz * specularAlbedo;
+    }
 #endif // ENABLE_SPECULAR_LOBE
 
-        u_Output[did] = outputColor;
-    }
+    u_Output[did] = outputColor;
 }

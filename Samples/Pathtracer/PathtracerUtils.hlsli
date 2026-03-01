@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -8,8 +8,7 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-#define M_PI 3.141592653589f
-
+#define M_PI    3.141592653589f
 #define FLT_MAX 3.402823466e+38f
 
 // Jenkins's "one at a time" hash function
@@ -41,7 +40,7 @@ uint InitRNG(uint2 pixel, uint2 resolution, uint frame)
 
 float UintToFloat(uint x)
 {
-    return asfloat(0x3f800000 | (x >> 9)) - 1.f;
+    return asfloat(0x3f800000 | (x >> 9)) - 1.0f;
 }
 
 uint XorShift(inout uint rngState)
@@ -146,16 +145,16 @@ struct GeometrySample
     float4 tangent;
 };
 
-GeometrySample GetGeometryFromHit(uint instanceIndex,
-                                  uint triangleIndex,
-                                  uint geometryIndex,
-                                  bool isFrontFacing,
-                                  float2 rayBarycentrics,
-                                  GeometryAttributes attributes,
-                                  StructuredBuffer<InstanceData> instanceBuffer,
-                                  StructuredBuffer<GeometryData> geometryBuffer,
-                                  StructuredBuffer<MaterialConstants> materialBuffer,
-                                  ByteAddressBuffer bindlessBuffers[])
+GeometrySample GetGeometryFromHit(
+    uint instanceIndex,
+    uint triangleIndex,
+    uint geometryIndex,
+    float2 rayBarycentrics,
+    GeometryAttributes attributes,
+    StructuredBuffer<InstanceData> instanceBuffer,
+    StructuredBuffer<GeometryData> geometryBuffer,
+    StructuredBuffer<MaterialConstants> materialBuffer,
+    ByteAddressBuffer bindlessBuffers[])
 {
     GeometrySample gs = (GeometrySample)0;
 
@@ -195,10 +194,8 @@ GeometrySample GetGeometryFromHit(uint instanceIndex,
         normals[1] = Unpack_RGB8_SNORM(vertexBuffer.Load(gs.geometry.normalOffset + indices[1] * c_SizeOfNormal));
         normals[2] = Unpack_RGB8_SNORM(vertexBuffer.Load(gs.geometry.normalOffset + indices[2] * c_SizeOfNormal));
         gs.geometryNormal = interpolate(normals, barycentrics);
-        gs.geometryNormal = mul(gs.instance.transform, float4(gs.geometryNormal, 0.0f)).xyz;
+        gs.geometryNormal = mul(gs.instance.transform, float4(gs.geometryNormal, 0.0)).xyz;
         gs.geometryNormal = normalize(gs.geometryNormal);
-
-        gs.geometryNormal *= isFrontFacing ? 1.0f : -1.0f;
     }
 
     if ((attributes & GeomAttr_Tangents) && gs.geometry.tangentOffset != ~0u)
@@ -208,15 +205,14 @@ GeometrySample GetGeometryFromHit(uint instanceIndex,
         tangents[1] = Unpack_RGBA8_SNORM(vertexBuffer.Load(gs.geometry.tangentOffset + indices[1] * c_SizeOfNormal));
         tangents[2] = Unpack_RGBA8_SNORM(vertexBuffer.Load(gs.geometry.tangentOffset + indices[2] * c_SizeOfNormal));
         gs.tangent.xyz = interpolate(tangents, barycentrics).xyz;
-        gs.tangent.xyz = mul(gs.instance.transform, float4(gs.tangent.xyz, 0.0f)).xyz;
+        gs.tangent.xyz = mul(gs.instance.transform, float4(gs.tangent.xyz, 0.0)).xyz;
         gs.tangent.xyz = normalize(gs.tangent.xyz);
         gs.tangent.w = tangents[0].w;
     }
 
     float3 objectSpaceFlatNormal = normalize(cross(gs.vertexPositions[1] - gs.vertexPositions[0], gs.vertexPositions[2] - gs.vertexPositions[0]));
 
-    gs.flatNormal = normalize(mul(gs.instance.transform, float4(objectSpaceFlatNormal, 0.0f)).xyz);
-    gs.flatNormal *= isFrontFacing ? 1.0f : -1.0f;
+    gs.flatNormal = normalize(mul(gs.instance.transform, float4(objectSpaceFlatNormal, 0.0)).xyz);
 
     return gs;
 }
@@ -232,13 +228,14 @@ enum MaterialAttributes
     MatAttr_All = 0x1F
 };
 
-MaterialSample SampleGeometryMaterial(GeometrySample gs,
-                                      float2 texGrad_x,
-                                      float2 texGrad_y,
-                                      float mipLevel, // <-- Use a compile time constant for mipLevel, < 0 for aniso filtering
-                                      MaterialAttributes attributes,
-                                      SamplerState materialSampler,
-                                      Texture2D bindlessTextures[])
+MaterialSample SampleGeometryMaterial(
+    GeometrySample gs,
+    float2 texGrad_x,
+    float2 texGrad_y,
+    float mipLevel, // <-- Use a compile time constant for mipLevel, < 0 for aniso filtering
+    MaterialAttributes attributes,
+    SamplerState materialSampler,
+    Texture2D bindlessTextures[])
 {
     MaterialTextureSample textures = DefaultMaterialTextures();
 
@@ -299,7 +296,7 @@ MaterialSample SampleGeometryMaterial(GeometrySample gs,
 void GetLightData(LightConstants light, float3 surfacePos, float2 rand2, bool enableSoftShadows, out float3 incidentVector, out float lightDistance, out float irradiance)
 {
     incidentVector = 0;
-    float halfAngularSize = 0;
+    float halfAngularSize = 0.0f;
     irradiance = 0;
     lightDistance = 0;
 

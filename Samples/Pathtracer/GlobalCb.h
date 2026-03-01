@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -22,7 +22,7 @@ struct GlobalConstants
     int frameIndex;
     uint enableAccumulation;
     float recipAccumulatedFrames;
-    int accumulatedFramesMax;
+    float padding;
 
     int enableEmissives;
     int enableLighting;
@@ -57,10 +57,10 @@ struct GlobalConstants
     float metalnessMax;
 };
 
-#define EXIT_MAX_BOUNCE 0
-#define EXIT_HIT_SKY 1
+#define EXIT_MAX_BOUNCE       0
+#define EXIT_HIT_SKY          1
 #define EXIT_RUSSIAN_ROULETTE 2
-#define EXIT_WITHIN_SURFACE 3
+#define EXIT_WITHIN_SURFACE   3
 #define EXIT_SMALL_THROUGHPUT 4
 
 // Set to 1 to over-ride the UI

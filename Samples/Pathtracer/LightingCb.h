@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -22,7 +22,8 @@
 #include "NRCStructures.h"
 #endif // ENABLE_NRC
 
-#define MAX_LIGHTS 8
+#define MAX_LIGHTS           8
+#define SHARC_RADIANCE_SCALE 1e3f
 
 struct LightingConstants
 {

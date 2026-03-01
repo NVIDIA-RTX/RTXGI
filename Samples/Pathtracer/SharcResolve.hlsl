@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -43,7 +43,7 @@ void sharcResolve(in uint2 did : SV_DispatchThreadID)
     resolveParameters.accumulationFrameNum = g_Lighting.sharcAccumulationFrameNum;
     resolveParameters.staleFrameNumMax = g_Lighting.sharcStaleFrameNum;
     resolveParameters.cameraPositionPrev = g_Lighting.sharcCameraPositionPrev.xyz;
-    resolveParameters.enableAntiFireflyFilter = g_Lighting.sharcEnableAntifirefly;
+    resolveParameters.frameIndex = g_Global.frameIndex;
 
     SharcResolveEntry(did.x, sharcParameters, resolveParameters);
 }

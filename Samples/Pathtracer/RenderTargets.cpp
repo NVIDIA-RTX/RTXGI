@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -29,14 +29,15 @@ RenderTargets::RenderTargets(nvrhi::IDevice* device, uint32_t width, uint32_t he
         texture = device->createTexture(desc);
     };
 
-    CreateCommonTexture(nvrhi::Format::R32_FLOAT, "denoiserViewspaceZ", denoiserViewSpaceZ);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserMotionVectors", denoiserMotionVectors);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserNormalRoughness", denoiserNormalRoughness);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserEmissive", denoiserEmissive);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserDiffuseAbedo", denoiserDiffuseAlbedo);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserSpecularAbedo", denoiserSpecularAlbedo);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserInDiffRadianceHitDist", denoiserInDiffRadianceHitDist);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserInSpecRadianceHitDist", denoiserInSpecRadianceHitDist);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserOutDiffRadianceHitDist", denoiserOutDiffRadianceHitDist);
-    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "denoiserOutSpecRadianceHitDist", denoiserOutSpecRadianceHitDist);
+    CreateCommonTexture(nvrhi::Format::R32_FLOAT, "depth", depth);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "motionVectors", motionVectors);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "normalRoughness", normalRoughness);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "emissive", emissive);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "diffuseAlbedo", diffuseAlbedo);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "specularAlbedo", specularAlbedo);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "inDiffRadianceHitDist", inDiffRadianceHitDist);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "inSpecRadianceHitDist", inSpecRadianceHitDist);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "outDiffRadianceHitDist", outDiffRadianceHitDist);
+    CreateCommonTexture(nvrhi::Format::RGBA16_FLOAT, "outSpecRadianceHitDist", outSpecRadianceHitDist);
+    CreateCommonTexture(nvrhi::Format::RGBA32_FLOAT, "outPathTracer", outPathTracer);
 }

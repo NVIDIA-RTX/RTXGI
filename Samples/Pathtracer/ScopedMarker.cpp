@@ -8,18 +8,14 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-#pragma once
+#include "ScopedMarker.h"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN // Exclude rarely-used items from Windows headers.
-#endif
-
-#include <Windows.h>
-#include <string>
-
-namespace NrcUtils
+ScopedMarker::ScopedMarker(nvrhi::ICommandList* commandList, const char* name) : m_commandList(commandList)
 {
-void Validate(HRESULT hr, LPWSTR message);
+    m_commandList->beginMarker(name);
+}
 
-std::wstring StringToWstring(const std::string& wstr);
-} // namespace NrcUtils
+ScopedMarker::~ScopedMarker()
+{
+    m_commandList->endMarker();
+}

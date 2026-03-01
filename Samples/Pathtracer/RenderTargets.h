@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * NVIDIA CORPORATION and its licensors retain all intellectual property
  * and proprietary rights in and to this software, related documentation
@@ -17,16 +17,18 @@ class RenderTargets
 public:
     RenderTargets(nvrhi::IDevice* device, uint32_t width, uint32_t height);
 
-    nvrhi::TextureHandle denoiserViewSpaceZ;
-    nvrhi::TextureHandle denoiserNormalRoughness;
-    nvrhi::TextureHandle denoiserMotionVectors;
-    nvrhi::TextureHandle denoiserEmissive;
-    nvrhi::TextureHandle denoiserDiffuseAlbedo;
-    nvrhi::TextureHandle denoiserSpecularAlbedo;
+    nvrhi::TextureHandle depth;
+    nvrhi::TextureHandle normalRoughness;
+    nvrhi::TextureHandle motionVectors;
+    nvrhi::TextureHandle emissive;
+    nvrhi::TextureHandle diffuseAlbedo;
+    nvrhi::TextureHandle specularAlbedo;
 
-    nvrhi::TextureHandle denoiserInDiffRadianceHitDist;
-    nvrhi::TextureHandle denoiserInSpecRadianceHitDist;
+    nvrhi::TextureHandle inDiffRadianceHitDist;
+    nvrhi::TextureHandle inSpecRadianceHitDist;
 
-    nvrhi::TextureHandle denoiserOutDiffRadianceHitDist;
-    nvrhi::TextureHandle denoiserOutSpecRadianceHitDist;
+    nvrhi::TextureHandle outDiffRadianceHitDist;
+    nvrhi::TextureHandle outSpecRadianceHitDist;
+
+    nvrhi::TextureHandle outPathTracer;
 };

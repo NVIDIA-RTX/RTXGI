@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2025, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2026, NVIDIA CORPORATION.  All rights reserved.
 #
 # NVIDIA CORPORATION and its licensors retain all intellectual property
 # and proprietary rights in and to this software, related documentation
@@ -10,7 +10,7 @@ cmake_minimum_required (VERSION 3.19)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../External/Donut/compileshaders.cmake)
 
-file(GLOB shaders "*.hlsl")
+file(GLOB shaders "*.hlsl" "*.hlsli")
 file(GLOB sources "*.cpp" "*.h")
 
 set(project Pathtracer)
@@ -58,7 +58,7 @@ set (SHADERMAKE_GENERAL_ARGS_DXIL "--shaderModel 6_6 --platform DXIL --WX --PDB 
 
 donut_compile_shaders(
         TARGET ${project}_shaders
-        CONFIG ${CMAKE_CURRENT_SOURCE_DIR}/shaders.cfg
+        CONFIG ${CMAKE_CURRENT_SOURCE_DIR}/Shaders.cfg
         SOURCES ${shaders}
         FOLDER ${folder}
         SPIRV_DXC ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/${project}/spirv
@@ -110,9 +110,9 @@ add_custom_command(TARGET ${project} POST_BUILD
 )
 
 # Copy runtime libraries
-file(GLOB NVRTC64_PATH "${NRC_DIR}/Bin/nvrtc64_*")
-file(GLOB CUDART64_PATH "${NRC_DIR}/Bin/cudart64_*")
-file(GLOB NVRTC_BUILTINS64 "${NRC_DIR}/Bin/nvrtc-builtins64_*")
+file(GLOB NVRTC64_PATH "${NRC_DIR}/bin/nvrtc64_*")
+file(GLOB CUDART64_PATH "${NRC_DIR}/bin/cudart64_*")
+file(GLOB NVRTC_BUILTINS64 "${NRC_DIR}/bin/nvrtc-builtins64_*")
 add_custom_command(
     TARGET ${project} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy "${NVRTC64_PATH}"
@@ -125,7 +125,7 @@ add_custom_command(
 
 set( copy_nrc_d3d_command
     ${CMAKE_COMMAND} -E copy
-    "${NRC_DIR}/Bin/$<$<CONFIG:Debug>:${NRC_LIBRARY_NAME_D3D12_DEBUG}>$<$<CONFIG:Release,RelWithDebInfo>:${NRC_LIBRARY_NAME_D3D12_RELEASE}>.dll"
+    "${NRC_DIR}/bin/$<$<CONFIG:Debug>:${NRC_LIBRARY_NAME_D3D12_DEBUG}>$<$<CONFIG:Release,RelWithDebInfo>:${NRC_LIBRARY_NAME_D3D12_RELEASE}>.dll"
     $<TARGET_FILE_DIR:${project}>
 )
 add_custom_command( TARGET ${project} POST_BUILD
@@ -136,7 +136,7 @@ add_custom_command( TARGET ${project} POST_BUILD
 if(DONUT_WITH_VULKAN AND SETUP_NRC_WITH_VULKAN)
     set( copy_nrc_vulkan_command
         ${CMAKE_COMMAND} -E copy
-        "${NRC_DIR}/Bin/$<$<CONFIG:Debug>:${NRC_LIBRARY_NAME_VULKAN_DEBUG}>$<$<CONFIG:Release,RelWithDebInfo>:${NRC_LIBRARY_NAME_VULKAN_RELEASE}>.dll"
+        "${NRC_DIR}/bin/$<$<CONFIG:Debug>:${NRC_LIBRARY_NAME_VULKAN_DEBUG}>$<$<CONFIG:Release,RelWithDebInfo>:${NRC_LIBRARY_NAME_VULKAN_RELEASE}>.dll"
         $<TARGET_FILE_DIR:${project}>
     )
     add_custom_command( TARGET ${project} POST_BUILD 
@@ -145,3 +145,13 @@ if(DONUT_WITH_VULKAN AND SETUP_NRC_WITH_VULKAN)
     )
 endif()
 
+if (DLSS_SHARED_LIBRARY_PATH)
+    add_custom_command(TARGET ${project} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DLSS_SHARED_LIBRARY_PATH}"
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/")
+    add_custom_command(TARGET ${project} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DLSS_RR_SHARED_LIBRARY_PATH}"
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/")
+endif()
