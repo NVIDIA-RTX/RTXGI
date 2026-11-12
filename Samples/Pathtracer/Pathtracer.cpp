@@ -25,7 +25,7 @@
 #include <random>
 
 #include "Pathtracer.h"
-#include "ScopedMarker.h"
+#include "Application/ScopedMarker.h"
 
 using namespace donut;
 using namespace donut::app;
@@ -36,8 +36,14 @@ using namespace donut::math;
 #include "Nrc/NrcUtils.h"
 #endif // ENABLE_NRC
 
+#if RTXGI_HAS_SER_SHADERS_DXIL && DONUT_WITH_DX12
+#include <nvrhi/d3d12.h>
+#endif // RTXGI_HAS_SER_SHADERS_DXIL && DONUT_WITH_DX12
+
 #include "LightingCb.h"
 #include "GlobalCb.h"
+#include "Shaders/TonemappingCb.h"
+#include "Shaders/AutoExposureCb.h"
 
 #if ENABLE_NRD
 #include "Nrd/NrdConfig.h"
@@ -46,9 +52,13 @@ using namespace donut::math;
 
 // Required for Agility SDK on Windows 10. Setup 1.c. 2.a.
 // https://devblogs.microsoft.com/directx/gettingstarted-dx12agility/
+// The version matches the package the root CMakeLists.txt downloads and deploys next to the executable.
+#ifndef RTXGI_D3D12_SDK_VERSION
+#error "RTXGI_D3D12_SDK_VERSION must be defined by the root CMakeLists.txt"
+#endif
 extern "C"
 {
-    __declspec(dllexport) extern const UINT D3D12SDKVersion = 616;
+    __declspec(dllexport) extern const UINT D3D12SDKVersion = RTXGI_D3D12_SDK_VERSION;
 }
 extern "C"
 {
@@ -86,6 +96,22 @@ donut::math::float2 GetPixelOffset(int frameIndex)
 
     return pixelOffset;
 }
+
+#if RTXGI_HAS_SER_SHADERS_DXIL && DONUT_WITH_DX12
+// On D3D12, Shader Execution Reordering uses the Shader Model 6.9 HitObject API, so the device and driver must report
+// SM 6.9. This differs from nvrhi's Feature::ShaderExecutionReordering, which reports the NVAPI reordering capability.
+bool SupportsD3D12ShaderModel69(nvrhi::IDevice* device)
+{
+    ID3D12Device* d3dDevice = static_cast<ID3D12Device*>(device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device));
+    if (!d3dDevice)
+    {
+        return false;
+    }
+
+    D3D12_FEATURE_DATA_SHADER_MODEL shaderModel = { .HighestShaderModel = D3D_SHADER_MODEL_6_9 };
+    return SUCCEEDED(d3dDevice->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel, sizeof(shaderModel))) && shaderModel.HighestShaderModel >= D3D_SHADER_MODEL_6_9;
+}
+#endif // RTXGI_HAS_SER_SHADERS_DXIL && DONUT_WITH_DX12
 } // namespace
 
 Pathtracer::Pathtracer(DeviceManager* deviceManager, UIData& ui, nvrhi::GraphicsAPI api) : ApplicationBase(deviceManager), m_ui(ui), m_api(api)
@@ -103,16 +129,19 @@ Pathtracer::~Pathtracer()
 bool Pathtracer::Initialize(int argc, const char* const* argv)
 {
     char* sceneName = nullptr;
+    int cameraIndex = -1;
     for (int n = 1; n < argc; n++)
     {
         const char* arg = argv[n];
 
         if (!strcmp(arg, "-noaccumulation"))
             m_ui.denoiserType = DenoiserType::None;
+        else if (!strcmp(arg, "-noautoexposure"))
+            m_ui.autoExposure = false;
         else if (!strcmp(arg, "-scene"))
             sceneName = (char*)argv[n + 1];
         else if (!strcmp(arg, "-camera"))
-            m_pathtracerScene->SetCameraIndex(atoi(argv[n + 1]));
+            cameraIndex = atoi(argv[n + 1]);
 #if ENABLE_NRC
         else if (!strcmp(arg, "-nrc"))
             m_ui.techSelection = TechSelection::Nrc;
@@ -122,6 +151,16 @@ bool Pathtracer::Initialize(int argc, const char* const* argv)
             m_ui.techSelection = TechSelection::Sharc;
 #endif // ENABLE_SHARC
     }
+
+#if SHADOW_RAY_USE_RAY_QUERY
+    // Ray tracing pipeline support does not imply inline ray query support, and the shaders are compiled for it.
+    if (!GetDevice()->queryFeatureSupport(nvrhi::Feature::RayQuery))
+    {
+        log::error(
+            "The graphics device does not support inline ray queries, which the shadow rays require. Rebuild with SHADOW_RAY_USE_RAY_QUERY set to 0 in GlobalCb.h to use the shadow hit group instead.");
+        return false;
+    }
+#endif // SHADOW_RAY_USE_RAY_QUERY
 
     m_resetAccumulation = true;
     m_accumulatedFrameCount = 0;
@@ -159,6 +198,7 @@ bool Pathtracer::Initialize(int argc, const char* const* argv)
 
     m_accelStructBuilder = std::make_unique<AccelStructBuilder>();
     m_pathtracerScene = std::make_unique<SampleScene>();
+    m_pathtracerScene->SetCameraIndex(cameraIndex); // Applied by SampleScene::OnLoaded once the scene cameras exist
     m_pathtracerPipelines = std::make_unique<Pipelines>();
 
     // Obtain the scene
@@ -180,6 +220,11 @@ bool Pathtracer::Initialize(int argc, const char* const* argv)
 
     SetAsynchronousLoadingEnabled(false);
     SetCurrentSceneName(sceneFileName.string());
+    if (!IsSceneLoaded())
+    {
+        log::error("Failed to load scene '%s'", sceneFileName.string().c_str());
+        return false;
+    }
     m_pathtracerScene->GetScene()->FinishedLoading(GetFrameIndex());
 
     m_camera.SetMoveSpeed(3.0f);
@@ -189,6 +234,9 @@ bool Pathtracer::Initialize(int argc, const char* const* argv)
 
     m_debugBuffer =
         GetDevice()->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(GlobalConstants), "GlobalConstants", engine::c_MaxRenderPassConstantBufferVersions));
+
+    m_tonemappingConstantBuffer = GetDevice()->createBuffer(
+        nvrhi::utils::CreateVolatileConstantBufferDesc(sizeof(TonemappingConstants), "TonemappingConstants", engine::c_MaxRenderPassConstantBufferVersions));
 
     // Unified binding
     nvrhi::BindingLayoutDesc bindingLayoutDesc;
@@ -253,6 +301,38 @@ bool Pathtracer::Initialize(int argc, const char* const* argv)
     };
     m_sharcBindingLayout = GetDevice()->createBindingLayout(bindingLayoutDesc);
 #endif // ENABLE_SHARC
+
+    m_autoExposurePass = std::make_unique<AutoExposurePass>(GetDevice());
+
+#if RTXGI_HAS_SER_SHADERS_DXIL && DONUT_WITH_DX12
+    if (m_api == nvrhi::GraphicsAPI::D3D12)
+    {
+        m_ui.serSupported = SupportsD3D12ShaderModel69(GetDevice());
+    }
+#endif // RTXGI_HAS_SER_SHADERS_DXIL && DONUT_WITH_DX12
+
+#if RTXGI_HAS_SER_SHADERS_SPIRV
+    if (m_api == nvrhi::GraphicsAPI::VULKAN)
+    {
+        // On Vulkan, the SER permutations use VK_NV_ray_tracing_invocation_reorder, which Main.cpp requests. nvrhi
+        // reports the feature when the device enabled the extension and the driver actually reorders.
+        m_ui.serSupported = GetDevice()->queryFeatureSupport(nvrhi::Feature::ShaderExecutionReordering);
+    }
+#endif // RTXGI_HAS_SER_SHADERS_SPIRV
+
+    if (m_ui.serSupported)
+    {
+        log::info("Shader Execution Reordering is available and %s.", m_ui.enableSer ? "enabled" : "disabled");
+    }
+    else
+    {
+        // The checkbox is grayed out, so it must not read as enabled
+        m_ui.enableSer = false;
+        log::info(
+            "Shader Execution Reordering is not available: it requires the SER shader permutations and %s.",
+            m_api == nvrhi::GraphicsAPI::VULKAN ? "a device and driver that reorder with VK_NV_ray_tracing_invocation_reorder" : "a Shader Model 6.9 device and driver");
+    }
+    m_enableSer = m_ui.enableSer;
 
     CreateCommonPipelines();
 
@@ -335,6 +415,7 @@ bool Pathtracer::Initialize(int argc, const char* const* argv)
         bindingLayoutDesc.visibility = nvrhi::ShaderType::Pixel;
         bindingLayoutDesc.bindings = {
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+            nvrhi::BindingLayoutItem::TypedBuffer_SRV(0),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
             nvrhi::BindingLayoutItem::Texture_UAV(1),
         };
@@ -350,11 +431,12 @@ bool Pathtracer::Initialize(int argc, const char* const* argv)
 void Pathtracer::CreateCommonPipelines()
 {
     m_pathtracerPipelines->CreateCommon(GetDevice(), *m_shaderFactory, m_api, BuildBindingLayouts());
+    m_autoExposurePass->CreatePipelines(*m_shaderFactory);
 }
 
 bool Pathtracer::CreateRayTracingPipelines()
 {
-    return m_pathtracerPipelines->CreateRayTracing(GetDevice(), *m_shaderFactory, BuildBindingLayouts(), m_ui.denoiserType == DenoiserType::Nrd);
+    return m_pathtracerPipelines->CreateRayTracing(GetDevice(), *m_shaderFactory, BuildBindingLayouts(), m_ui.denoiserType == DenoiserType::Nrd, m_enableSer);
 }
 
 #if ENABLE_NRC
@@ -371,10 +453,26 @@ bool Pathtracer::LoadScene(std::shared_ptr<vfs::IFileSystem> fs, const std::file
 
 void Pathtracer::SceneLoaded()
 {
+    // Donut calls SceneLoaded() after a synchronous load even when LoadScene() failed, in which case there is no scene
+    // to set up. Returning before the base call keeps IsSceneLoaded() false so the caller can report the failure.
+    if (!m_pathtracerScene->GetScene())
+    {
+        return;
+    }
+
     ApplicationBase::SceneLoaded();
 
     bool rebuildAS = false;
     m_pathtracerScene->OnLoaded(GetFrameIndex(), m_ui, m_camera, m_resetAccumulation, rebuildAS, m_accumulatedFrameCount);
+
+#if ENABLE_SHARC
+    // The cache holds lighting from the previous scene. Keep the request pending until the SHaRC pass runs, which may
+    // be several frames later if another indirect diffuse mode is active at load time.
+    m_sharcCacheNeedsClear = true;
+#endif // ENABLE_SHARC
+
+    ResetAutoExposure();
+
     if (rebuildAS)
         m_accelStructBuilder->RequestRebuild();
 }
@@ -455,6 +553,7 @@ bool Pathtracer::MouseScrollUpdate(double xoffset, double yoffset)
 
 void Pathtracer::Animate(float fElapsedTimeSeconds)
 {
+    m_frameTime = fElapsedTimeSeconds;
     m_camera.Animate(fElapsedTimeSeconds);
 
     if (IsSceneLoaded() && m_ui.enableAnimations)
@@ -480,6 +579,7 @@ void Pathtracer::BackBufferResizing()
     m_renderTargets = nullptr;
     m_accumulationBuffer = nullptr;
     m_bindingCache->Clear();
+    m_autoExposurePass->ResetBindingCache();
     m_resetAccumulation = true;
 
     m_denoiserBindingSet = nullptr;
@@ -593,7 +693,9 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 
     m_accumulatedFrameCount = m_resetAccumulation ? 1 : m_accumulatedFrameCount + 1;
 
-    m_pathtracerScene->GetScene()->Refresh(m_commandList, frameIndex);
+    // The scene graph was already refreshed at the top of the frame; refreshing it again here would copy the current
+    // transforms over the previous ones and erase the rigid-object motion that the motion vectors depend on
+    m_pathtracerScene->GetScene()->RefreshBuffers(m_commandList, frameIndex);
     m_accelStructBuilder->UpdateTLAS(m_commandList, *m_pathtracerScene->GetScene(), m_ui.enableTransmission);
 
     LightingConstants constants = {};
@@ -658,9 +760,12 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
         nrcPerFrameSettings.maxExpectedAverageRadianceValue = m_ui.nrcMaxAverageRadiance;
         nrcPerFrameSettings.terminationHeuristicThreshold = m_ui.nrcTerminationHeuristicThreshold;
         nrcPerFrameSettings.trainingTerminationHeuristicThreshold = m_ui.nrcTerminationHeuristicThreshold;
-        nrcPerFrameSettings.numTrainingIterations = m_ui.nrcNumTrainingIterations;
+        nrcPerFrameSettings.numTrainingIterations = 1;
         nrcPerFrameSettings.resolveMode = m_ui.nrcResolveMode;
         nrcPerFrameSettings.trainTheCache = m_ui.nrcTrainCache;
+        nrcPerFrameSettings.proportionPrimarySegmentsToTrainOn = 0.02f;
+        // Only consulted by NRC when the termination heuristic is off (DirectCacheView); every other resolve mode skips delta vertices regardless
+        nrcPerFrameSettings.skipDeltaVertices = m_ui.nrcSkipDeltaVertices;
         nrcPerFrameSettings.usedTrainingDimensions = nrc::ComputeIdealTrainingDimensions(nrcContextSettings.frameDimensions, nrcPerFrameSettings.numTrainingIterations);
         m_nrcUsedTrainingWidth = nrcPerFrameSettings.usedTrainingDimensions.x;
         m_nrcUsedTrainingHeight = nrcPerFrameSettings.usedTrainingDimensions.y;
@@ -730,8 +835,26 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
         m_denoiserOutBindingSet = device->createBindingSet(bindingSetDesc, m_denoiserBindingLayout);
     }
 
+#if ENABLE_NRD
+    if (m_ui.denoiserType == DenoiserType::Nrd && !m_nrd)
+    {
+        m_nrd = std::make_unique<NrdIntegration>(device, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
+
+        if (!m_nrd->Initialize(renderWidth, renderHeight, *m_shaderFactory))
+        {
+            // Fall back to the undenoised output. Selecting NRD again in the UI retries the initialization.
+            log::error("NRD initialization failed, the output is not denoised.");
+            m_nrd = nullptr;
+            m_ui.denoiserType = DenoiserType::None;
+        }
+    }
+#endif // ENABLE_NRD
+
+    // Evaluated after the NRD creation so that a failed initialization selects the pipelines without NRD output.
     bool resetDenoiser = m_enableNrd != (m_ui.denoiserType == DenoiserType::Nrd);
-    if ((resetDenoiser && !skipDenoiser) || m_ui.reloadShaders)
+    // The SER toggle selects a different set of shader permutations; the image is unchanged, so nothing is reset.
+    const bool serChanged = m_enableSer != m_ui.enableSer;
+    if ((resetDenoiser && !skipDenoiser) || serChanged || m_ui.reloadShaders)
     {
         if (m_ui.reloadShaders)
         {
@@ -739,15 +862,11 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
             CreateCommonPipelines();
             m_ui.reloadShaders = false;
         }
+        m_enableSer = m_ui.enableSer;
         CreateRayTracingPipelines();
     }
 
 #if ENABLE_NRD
-    if (!m_nrd)
-    {
-        m_nrd = std::make_unique<NrdIntegration>(device, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR);
-        m_nrd->Initialize(renderWidth, renderHeight, *m_shaderFactory);
-    }
     m_enableNrd = (m_ui.denoiserType == DenoiserType::Nrd) && !skipDenoiser;
 #endif // ENABLE_NRD
 
@@ -758,8 +877,6 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
     globalConstants.enableBackFaceCull = m_ui.enableBackFaceCull;
     globalConstants.bouncesMax = m_ui.bouncesMax;
     globalConstants.frameIndex = m_frameIndex++;
-    globalConstants.enableAccumulation = m_ui.denoiserType == DenoiserType::Accumulation;
-    globalConstants.recipAccumulatedFrames = globalConstants.enableAccumulation ? (1.0f / (float)m_accumulatedFrameCount) : 1.0f;
     globalConstants.intensityScale = 1.0f;
     globalConstants.enableEmissives = m_ui.enableEmissives;
     globalConstants.enableLighting = m_ui.enableLighting;
@@ -770,16 +887,14 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
     globalConstants.throughputThreshold = m_ui.throughputThreshold;
     globalConstants.enableRussianRoulette = m_ui.enableRussianRoulette;
     globalConstants.samplesPerPixel = m_ui.samplesPerPixel;
-    globalConstants.exposureScale = donut::math::exp2f(m_ui.exposureAdjustment);
     globalConstants.roughnessMin = m_ui.roughnessMin;
     globalConstants.roughnessMax = std::max(m_ui.roughnessMin, m_ui.roughnessMax);
     globalConstants.metalnessMin = m_ui.metalnessMin;
     globalConstants.metalnessMax = std::max(m_ui.metalnessMin, m_ui.metalnessMax);
+    globalConstants.transmissionIor = std::max(1.0f, m_ui.transmissionIor);
 
-    globalConstants.clamp = (uint)m_ui.toneMappingClamp;
-    globalConstants.toneMappingOperator = (uint)m_ui.toneMappingOperator;
-
-    globalConstants.targetLight = m_ui.targetLight;
+    // Only lights that were uploaded this frame can be targeted; anything else falls back to sampling all lights
+    globalConstants.targetLight = (m_ui.targetLight >= 0 && m_ui.targetLight < constants.lightCount) ? m_ui.targetLight : -1;
     globalConstants.debugOutputMode = (uint)m_ui.ptDebugOutput;
 
 #if ENABLE_NRC
@@ -795,12 +910,26 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 #if ENABLE_NRD
     if (m_enableNrd)
     {
-        nrd::HitDistanceParameters hitDistanceParameters;
-        globalConstants.nrdHitDistanceParams = (float4&)hitDistanceParameters;
+        nrd::ReblurHitDistanceParameters hitDistanceParameters;
+        globalConstants.nrdHitDistanceParams = float4(hitDistanceParameters.A, hitDistanceParameters.B, hitDistanceParameters.C, 0.0f);
     }
 #endif // ENABLE_NRD
 
     m_commandList->writeBuffer(m_debugBuffer, &globalConstants, sizeof(globalConstants));
+
+    TonemappingConstants tonemappingConstants = {};
+    // The manual EV reaches the tonemapper through the adapted luminance buffer, see the exposure metering below.
+    tonemappingConstants.exposureScale = m_ui.autoExposure ? donut::math::exp2f(m_ui.exposureCompensation) : 1.0f;
+    tonemappingConstants.toneMappingOperator = (uint)m_ui.toneMappingOperator;
+    tonemappingConstants.clamp = (uint)m_ui.toneMappingClamp;
+    tonemappingConstants.enableAccumulation = m_ui.denoiserType == DenoiserType::Accumulation;
+    tonemappingConstants.recipAccumulatedFrames = tonemappingConstants.enableAccumulation ? (1.0f / (float)m_accumulatedFrameCount) : 1.0f;
+    // ImGui lets Ctrl+click type values outside the slider range; below 1.0 the curve expands and 0 would divide by zero.
+    const float reinhardWhitePoint = std::max(1.0f, m_ui.reinhardWhitePoint);
+    tonemappingConstants.reinhardRecipWhitePointSquared = 1.0f / (reinhardWhitePoint * reinhardWhitePoint);
+    tonemappingConstants.agxLook = (uint)m_ui.agxLook;
+    m_commandList->writeBuffer(m_tonemappingConstantBuffer, &tonemappingConstants, sizeof(tonemappingConstants));
+
     m_commandList->clearState();
 
     using PT = Pipelines::Type;
@@ -838,15 +967,15 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
             args.width = renderWidth;
             args.height = renderHeight;
             m_commandList->dispatchRays(args);
-            // There is no dependency between the two
-            // raygens, so a barrier is not required here.
-            // NVRHI sees that we're using the same UAVs and inserts UAV barriers.
-            // Fortunately, we can tell it that we know better.
-            m_commandList->setEnableAutomaticBarriers(false);
 
             // NRC update pathtracing pass
             if (m_ui.nrcTrainCache)
             {
+                // There is no dependency between the two raygens, so a barrier is not required here.
+                // NVRHI sees that we're using the same UAVs and inserts UAV barriers.
+                // Fortunately, we can tell it that we know better.
+                m_commandList->setEnableAutomaticBarriers(false);
+
                 ScopedMarker scopedMarker(m_commandList, "NrcUpdatePathtracingPass");
 
                 state.shaderTable = m_pathtracerPipelines->GetPermutation(PT::NrcUpdate).shaderTable;
@@ -884,13 +1013,15 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
 
         if (m_ui.sharcEnableUpdate)
         {
-            if (m_ui.sharcEnableClear || m_pathtracerScene->IsReloaded() || (m_sharcMaterialDemodulationApplied != m_ui.sharcEnableMaterialDemodulation))
+            if (m_sharcCacheNeedsClear || m_ui.sharcEnableClear || (m_sharcMaterialDemodulationApplied != m_ui.sharcEnableMaterialDemodulation))
             {
                 m_sharcMaterialDemodulationApplied = m_ui.sharcEnableMaterialDemodulation;
 
                 m_commandList->clearBufferUInt(m_sharcHashEntriesBuffer, m_sharcInvalidEntry);
                 m_commandList->clearBufferUInt(m_sharcAccumulationBuffer, 0);
                 m_commandList->clearBufferUInt(m_sharcResolvedBuffer, 0);
+
+                m_sharcCacheNeedsClear = false;
             }
 
             // SHARC update
@@ -991,6 +1122,36 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
     }
 #endif // ENABLE_NRD
 
+    // DLSS Ray Reconstruction does not consume an exposure, and it displays a denoised image, so its output is metered
+    // after the evaluation below. Metering its noisy single-sample input instead would count every zero-radiance sample
+    // as a dark pixel and over-expose the denoised result.
+    bool meterRayReconstructionOutput = false;
+#if DONUT_WITH_DLSS
+    meterRayReconstructionOutput = useRayReconstruction && m_dlss->IsRayReconstructionInitialized();
+#endif // DONUT_WITH_DLSS
+    const bool updateAutoExposure = m_ui.autoExposure && (!m_ui.autoExposureLock || m_autoExposureResetPending);
+
+    // Exposure metering runs before upscaling so that the tonemapper and DLSS share one exposure. With auto exposure
+    // off, the adapted luminance is the one the manual EV maps to middle grey.
+    if (m_ui.autoExposure)
+    {
+        if (updateAutoExposure && !meterRayReconstructionOutput)
+        {
+            // The log mean and the percentile window are nonlinear, so metering the noisy single-sample frame while
+            // the display shows the accumulated radiance would converge to a biased exposure. The tonemapping pass
+            // updates the accumulation buffer after this point, so it still holds the previous frame's accumulated
+            // result here; meter that whenever it is valid, and fall back to the fresh frame otherwise.
+            const bool meterAccumulation = tonemappingConstants.enableAccumulation && m_accumulatedFrameCount > 1;
+            nvrhi::ITexture* meteringSource = meterAccumulation ? m_accumulationBuffer.Get() : m_renderTargets->outPathTracer.Get();
+            const uint2 meteringSize = meterAccumulation ? uint2(outputWidth, outputHeight) : uint2(renderWidth, renderHeight);
+            m_autoExposurePass->Render(m_commandList, meteringSource, meteringSize, m_ui.autoExposureSettings, m_frameTime, m_autoExposureResetPending);
+        }
+    }
+    else
+    {
+        m_autoExposurePass->SetAdaptedLuminance(m_commandList, AUTO_EXPOSURE_KEY / donut::math::exp2f(m_ui.exposureAdjustment));
+    }
+
 #if DONUT_WITH_DLSS
     if (enableDlss)
     {
@@ -999,6 +1160,8 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
         params.motionVectorsTexture = m_renderTargets->motionVectors;
         params.inputColorTexture = m_renderTargets->outPathTracer;
         params.outputColorTexture = m_accumulationBuffer;
+        params.exposureBuffer = m_autoExposurePass->GetExposureBuffer();
+        params.exposureScale = AutoExposurePass::GetDlssExposureScale(tonemappingConstants.exposureScale);
 
         if (useRayReconstruction)
         {
@@ -1010,6 +1173,13 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
         m_dlss->Evaluate(m_commandList, params, m_view);
     }
 #endif // DONUT_WITH_DLSS
+
+    if (updateAutoExposure && meterRayReconstructionOutput)
+    {
+        m_autoExposurePass->Render(
+            m_commandList, m_accumulationBuffer.Get(), uint2(outputWidth, outputHeight), m_ui.autoExposureSettings, m_frameTime, m_autoExposureResetPending);
+    }
+    m_autoExposureResetPending = false;
 
     // Accumulation and tonemapping
     {
@@ -1029,7 +1199,8 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
         }
 
         nvrhi::BindingSetDesc bindingSetDesc;
-        bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_debugBuffer),
+        bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_tonemappingConstantBuffer),
+                                    nvrhi::BindingSetItem::TypedBuffer_SRV(0, m_autoExposurePass->GetExposureBuffer()),
                                     nvrhi::BindingSetItem::Texture_UAV(0, enableDlss ? m_accumulationBuffer : m_renderTargets->outPathTracer),
                                     nvrhi::BindingSetItem::Texture_UAV(1, m_accumulationBuffer) };
 
@@ -1057,7 +1228,6 @@ void Pathtracer::Render(nvrhi::IFramebuffer* framebuffer)
     device->executeCommandList(m_commandList);
 
     m_resetAccumulation = false;
-    m_pathtracerScene->ClearReloaded();
 
 #if ENABLE_NRC
     if (m_ui.techSelection == TechSelection::Nrc)
@@ -1095,6 +1265,11 @@ std::shared_ptr<donut::engine::Scene> Pathtracer::GetScene() const
 void Pathtracer::ResetAccumulation()
 {
     m_resetAccumulation = true;
+}
+
+void Pathtracer::ResetAutoExposure()
+{
+    m_autoExposureResetPending = true;
 }
 
 void Pathtracer::RebuildAccelerationStructure()

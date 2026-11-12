@@ -8,7 +8,7 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-#include "Defines.h"
+#include "Application/Defines.h"
 #include "Pipelines.h"
 
 #include <algorithm>
@@ -67,7 +67,7 @@ void Pipelines::CreateCommon(nvrhi::IDevice* device, ShaderFactory& shaderFactor
     m_tonemappingPS = shaderFactory.CreateShader("app/Shaders/Tonemapping.hlsl", "main_ps", nullptr, nvrhi::ShaderType::Pixel);
 }
 
-bool Pipelines::CreateRayTracing(nvrhi::IDevice* device, ShaderFactory& shaderFactory, const BindingLayouts& layouts, bool enableNrd)
+bool Pipelines::CreateRayTracing(nvrhi::IDevice* device, ShaderFactory& shaderFactory, const BindingLayouts& layouts, bool enableNrd, bool enableSer)
 {
     char const* enableDenoiserStr = enableNrd ? "1" : "0";
 
@@ -86,6 +86,15 @@ bool Pipelines::CreateRayTracing(nvrhi::IDevice* device, ShaderFactory& shaderFa
     macros[Type::SharcQuery].push_back(ShaderMacro("SHARC_QUERY", "1"));
     macros[Type::SharcQuery].push_back(ShaderMacro("ENABLE_NRD", enableDenoiserStr));
 #endif // ENABLE_SHARC
+
+    // Selects the SER permutations (see Shaders.cfg) that trace through a hit object with thread reordering
+    if (enableSer)
+    {
+        for (uint32_t i = 0; i < Type::Count; ++i)
+        {
+            macros[i].push_back(ShaderMacro("ENABLE_SER", "1"));
+        }
+    }
 
     for (uint32_t i = 0; i < Type::Count; ++i)
     {

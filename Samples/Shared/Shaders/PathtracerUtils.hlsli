@@ -11,6 +11,13 @@
 #define M_PI    3.141592653589f
 #define FLT_MAX 3.402823466e+38f
 
+// Surfaces whose material transmission is at or above this value are pass-through for the radiance caches: neither
+// NRC nor SHaRC caches or queries them, the path continues through the glass and the first surface behind it becomes
+// the cache vertex. The caches store radiance leaving a diffuse-like surface, which does not describe glass: NRC's
+// surface attributes carry no transmission or IOR, and caching glass lets lossless refraction/TIR loops feed back
+// into themselves through SHaRC's resampling and break the energy conservation.
+#define PASS_THROUGH_TRANSMISSION 0.5f
+
 // Jenkins's "one at a time" hash function
 uint JenkinsHash(uint x)
 {
@@ -215,6 +222,35 @@ GeometrySample GetGeometryFromHit(
     gs.flatNormal = normalize(mul(gs.instance.transform, float4(objectSpaceFlatNormal, 0.0)).xyz);
 
     return gs;
+}
+
+// Returns the world-space position the hit point had on the previous frame, for motion vectors. Skinned meshes carry
+// the previous frame's skinned positions in a dedicated vertex stream maintained by the skinning pass; every other
+// mesh reuses its current object-space position. Rigid node animation is covered by the instance's previous transform.
+// Requires the sample to have been fetched with GeomAttr_Position.
+float3 ComputePreviousHitPosition(GeometrySample gs, uint triangleIndex, float2 rayBarycentrics, ByteAddressBuffer bindlessBuffers[])
+{
+    float3 objectSpacePositionPrev = gs.objectSpacePosition;
+
+    if (gs.geometry.prevPositionOffset != ~0u)
+    {
+        ByteAddressBuffer indexBuffer = bindlessBuffers[NonUniformResourceIndex(gs.geometry.indexBufferIndex)];
+        ByteAddressBuffer vertexBuffer = bindlessBuffers[NonUniformResourceIndex(gs.geometry.vertexBufferIndex)];
+
+        float3 barycentrics;
+        barycentrics.yz = rayBarycentrics;
+        barycentrics.x = 1.0f - (barycentrics.y + barycentrics.z);
+
+        uint3 indices = indexBuffer.Load3(gs.geometry.indexOffset + triangleIndex * c_SizeOfTriangleIndices);
+
+        float3 vertexPositionsPrev[3];
+        vertexPositionsPrev[0] = asfloat(vertexBuffer.Load3(gs.geometry.prevPositionOffset + indices[0] * c_SizeOfPosition));
+        vertexPositionsPrev[1] = asfloat(vertexBuffer.Load3(gs.geometry.prevPositionOffset + indices[1] * c_SizeOfPosition));
+        vertexPositionsPrev[2] = asfloat(vertexBuffer.Load3(gs.geometry.prevPositionOffset + indices[2] * c_SizeOfPosition));
+        objectSpacePositionPrev = interpolate(vertexPositionsPrev, barycentrics);
+    }
+
+    return mul(gs.instance.prevTransform, float4(objectSpacePositionPrev, 1.0f)).xyz;
 }
 
 enum MaterialAttributes

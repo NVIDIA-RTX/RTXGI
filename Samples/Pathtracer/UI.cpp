@@ -8,6 +8,8 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
+#include <algorithm>
+
 #include <donut/core/math/math.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/UserInterfaceUtils.h>
@@ -24,6 +26,9 @@
 using namespace donut::app;
 using namespace donut::engine;
 using namespace donut::math;
+
+// Shared with HLSL, so it needs the donut::math types in scope (MAX_LIGHTS)
+#include "LightingCb.h"
 
 // Conversion between sRGB to linear color space
 // Required here because of a known bug with ImGui and sRGB framebuffer
@@ -146,6 +151,13 @@ void UI::buildUI(void)
             ImGui::SameLine();
             updateAccum |= ImGui::Checkbox("Transmission", &m_ui.enableTransmission);
 
+            // Selects the SER pipelines; the image is unchanged, so no accumulation reset
+            ImGui::BeginDisabled(!m_ui.serSupported);
+            ImGui::Checkbox("Shader Execution Reordering", &m_ui.enableSer);
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip(
+                "Reorders ray tracing threads by hit before shading. Requires a Shader Model 6.9 device and driver on D3D12, or VK_NV_ray_tracing_invocation_reorder on Vulkan.");
+
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -229,11 +241,11 @@ void UI::buildUI(void)
 
             updateAccum |= ImGui::SliderInt("Bounces", &m_ui.bouncesMax, 1, 24);
             updateAccum |= ImGui::SliderInt("Samples Per Pixel", &m_ui.samplesPerPixel, 1, 16);
-            updateAccum |= ImGui::SliderFloat("Exposure Adjustment", &m_ui.exposureAdjustment, -8.f, 8.0f);
             updateAccum |= ImGui::SliderFloat("Roughness Min", &m_ui.roughnessMin, 0.0f, 1.0f);
             updateAccum |= ImGui::SliderFloat("Roughness Max", &m_ui.roughnessMax, 0.0f, 1.0f);
             updateAccum |= ImGui::SliderFloat("Metalness Min", &m_ui.metalnessMin, 0.0f, 1.0f);
             updateAccum |= ImGui::SliderFloat("Metalness Max", &m_ui.metalnessMax, 0.0f, 1.0f);
+            updateAccum |= ImGui::SliderFloat("Transmission IoR", &m_ui.transmissionIor, 1.0f, 3.0f);
 
             // Debug views
             updateAccum |= ImGui::Combo("Debug Output", (int*)&m_ui.ptDebugOutput, m_ui.ptDebugOutputTypeStrings);
@@ -256,7 +268,6 @@ void UI::buildUI(void)
             updateAccum |= ImGui::Checkbox("Include Direct Illumination", &m_ui.nrcIncludeDirectIllumination);
             updateAccum |= ImGui::Checkbox("Skip delta vertices", &m_ui.nrcSkipDeltaVertices);
             updateAccum |= ImGui::SliderFloat("Heuristic Threshold", &m_ui.nrcTerminationHeuristicThreshold, 0.0f, 0.25f, "%.3f");
-            updateAccum |= ImGui::SliderInt("Num Training Iterations", &m_ui.nrcNumTrainingIterations, 1, 4);
             updateAccum |= ImGui::SliderFloat("Max Average Radiance Value", &m_ui.nrcMaxAverageRadiance, 0.001f, 1000.0f);
             updateAccum |= ImGui::Combo("Resolve Mode", (int*)&m_ui.nrcResolveMode, nrc::GetImGuiResolveModeComboString());
         }
@@ -300,6 +311,22 @@ void UI::buildUI(void)
 
         const auto& lights = m_app.GetScene()->GetSceneGraph()->GetLights();
 
+        // The selection outlives scene changes, so make sure it still refers to a light in the current scene and
+        // re-derive its index, which is what "Target this light?" writes into targetLight
+        if (m_selectedLight)
+        {
+            const auto it = std::find(lights.begin(), lights.end(), m_selectedLight);
+            if (it == lights.end())
+            {
+                m_selectedLight = nullptr;
+                m_selectedLightIndex = 0;
+            }
+            else
+            {
+                m_selectedLightIndex = int(std::distance(lights.begin(), it));
+            }
+        }
+
         if (!lights.empty() && ImGui::CollapsingHeader("Lights"))
         {
             if (ImGui::BeginCombo("Select Light", m_selectedLight ? m_selectedLight->GetName().c_str() : "(None)"))
@@ -322,12 +349,20 @@ void UI::buildUI(void)
 
             if (m_selectedLight)
             {
-                bool target = (m_ui.targetLight == m_selectedLightIndex);
-                updateAccum |= ImGui::Checkbox("Target this light?", &target);
-                if (target)
-                    m_ui.targetLight = m_selectedLightIndex;
+                // Only the first MAX_LIGHTS scene lights are uploaded to the GPU, so only those can be targeted
+                if (m_selectedLightIndex < MAX_LIGHTS)
+                {
+                    bool target = (m_ui.targetLight == m_selectedLightIndex);
+                    updateAccum |= ImGui::Checkbox("Target this light?", &target);
+                    if (target)
+                        m_ui.targetLight = m_selectedLightIndex;
+                    else if (m_ui.targetLight == m_selectedLightIndex)
+                        m_ui.targetLight = -1;
+                }
                 else
-                    m_ui.targetLight = -1;
+                {
+                    ImGui::TextDisabled("Not uploaded to the GPU (only the first %d lights are), cannot be targeted", MAX_LIGHTS);
+                }
 
                 updateAccum |= donut::app::LightEditor(*m_selectedLight);
             }
@@ -342,8 +377,48 @@ void UI::buildUI(void)
         {
             ImGui::Indent(12.0f);
 
-            updateAccum |= ImGui::Combo("Operator", (int*)&m_ui.toneMappingOperator, m_ui.toneMappingOperatorStrings);
+            // Tonemapping runs after accumulation on the linear radiance, so none of these settings invalidate it.
+            ImGui::Combo("Operator", (int*)&m_ui.toneMappingOperator, m_ui.toneMappingOperatorStrings);
+            if (m_ui.toneMappingOperator == ToneMappingOperator::Reinhard)
+            {
+                ImGui::SliderFloat("White Point", &m_ui.reinhardWhitePoint, 1.0f, 16.0f);
+            }
+            else if (m_ui.toneMappingOperator == ToneMappingOperator::Agx)
+            {
+                ImGui::Combo("Look", (int*)&m_ui.agxLook, m_ui.agxLookStrings);
+            }
             ImGui::Checkbox("Clamp", &m_ui.toneMappingClamp);
+
+            if (ImGui::Checkbox("Auto Exposure", &m_ui.autoExposure) && m_ui.autoExposure)
+                m_app.ResetAutoExposure();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!m_ui.autoExposure);
+            ImGui::Checkbox("Lock", &m_ui.autoExposureLock);
+            ImGui::SameLine();
+            if (ImGui::Button("Reset##AutoExposure"))
+                m_app.ResetAutoExposure();
+            ImGui::EndDisabled();
+
+            if (m_ui.autoExposure)
+            {
+                ImGui::SliderFloat("Exposure Compensation (EV)", &m_ui.exposureCompensation, -8.0f, 8.0f);
+
+                if (ImGui::TreeNode("Auto Exposure Settings"))
+                {
+                    AutoExposurePass::Settings& settings = m_ui.autoExposureSettings;
+                    ImGui::SliderFloat("Adaptation Speed Up", &settings.adaptationSpeedUp, 0.0f, 10.0f);
+                    ImGui::SliderFloat("Adaptation Speed Down", &settings.adaptationSpeedDown, 0.0f, 10.0f);
+                    ImGui::SliderFloat("Low Percentile", &settings.lowPercentile, 0.0f, 1.0f);
+                    ImGui::SliderFloat("High Percentile", &settings.highPercentile, 0.0f, 1.0f);
+                    ImGui::SliderFloat("Min Luminance (EV)", &settings.minLogLuminance, -16.0f, 16.0f);
+                    ImGui::SliderFloat("Max Luminance (EV)", &settings.maxLogLuminance, -16.0f, 16.0f);
+                    ImGui::TreePop();
+                }
+            }
+            else
+            {
+                ImGui::SliderFloat("Exposure (EV)", &m_ui.exposureAdjustment, -8.0f, 8.0f);
+            }
 
             ImGui::Indent(-12.0f);
         }

@@ -67,6 +67,8 @@ private:
     };
 
     nvrhi::BufferHandle m_constantBuffer;
+    nvrhi::BindingLayoutHandle m_sharedBindingLayout;
+    nvrhi::BindingSetHandle m_sharedBindingSet;
     std::vector<NrdPipeline> m_pipelines;
     std::vector<nvrhi::SamplerHandle> m_samplers;
     std::vector<nvrhi::TextureHandle> m_permanentTextures;

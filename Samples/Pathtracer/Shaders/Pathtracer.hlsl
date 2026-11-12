@@ -33,9 +33,24 @@
 #define BOUNCES_MIN                     3
 #define RIS_CANDIDATES_LIGHTS           8 // Number of candidates used for resampling of analytical lights
 #define SHADOW_RAY_IN_RIS               1 // Enable this to cast shadow rays for each candidate during resampling. This is expensive but increases quality
-#define SHADOW_RAY_INDEX                1
+#define SHADOW_RAY_INDEX                1 // Hit group of the shadow rays when SHADOW_RAY_USE_RAY_QUERY (GlobalCb.h) is 0
 #define TRACING_DISTANCE                1000.0f
 #define SHARC_ENABLE_DEBUG              1
+#define MEDIUM_STACK_DEPTH              4 // Max nesting depth of overlapping transmissive materials tracked per path
+
+// Shader Execution Reordering: the ENABLE_SER permutations (see Shaders.cfg) reorder threads by hit before invoking
+// the closest-hit/miss shaders. D3D12 uses the Shader Model 6.9 HitObject API; DXC cannot lower that API to SPIR-V,
+// so Vulkan uses the hit object instructions of VK_NV_ray_tracing_invocation_reorder (HitObjectNV.hlsli).
+// TARGET_D3D12 is defined by the DXIL shader build.
+#ifndef ENABLE_SER
+#define ENABLE_SER                      0
+#endif
+#ifndef TARGET_D3D12
+#define TARGET_D3D12                    0
+#endif
+#if ENABLE_SER && !TARGET_D3D12
+#include "HitObjectNV.hlsli"
+#endif
 
 struct [raypayload] RayPayload
 {
@@ -114,8 +129,29 @@ RayDesc GeneratePinholeCameraRay(float2 normalizedDeviceCoordinate, float4x4 vie
     return ray;
 }
 
-// Casts a shadow ray and returns true if light is not occluded ie. it hits nothing
-// Note that we use dedicated hit group with simpler shaders for shadow rays
+// Evaluates a non-opaque shadow-ray candidate: alpha-tested materials occlude when they pass the cutoff, other
+// materials tint the visibility by their transmission. Returns true when the light is occluded and traversal can stop.
+// Shared by the inline RayQuery traversal and the AnyHitShadow fallback so both paths shade identically.
+bool EvaluateShadowHit(uint instanceID, uint primitiveIndex, uint geometryIndex, float2 barycentrics, inout float3 visibility)
+{
+    GeometrySample geometry = GetGeometryFromHit(instanceID, primitiveIndex, geometryIndex, barycentrics, GeomAttr_TexCoord, t_InstanceData, t_GeometryData, t_MaterialConstants, t_BindlessBuffers);
+    MaterialSample material = SampleGeometryMaterial(geometry, 0, 0, 0, MatAttr_All, s_MaterialSampler, t_BindlessTextures);
+
+    switch (geometry.material.domain)
+    {
+        case MaterialDomain_AlphaTested:
+        case MaterialDomain_TransmissiveAlphaTested:
+            return material.opacity >= geometry.material.alphaCutoff;
+
+        default:
+            // Modulate the visibility by the material's transmission
+            visibility *= (1.0f - material.opacity) * material.baseColor;
+            return dot(visibility, 0.333f) <= 0.001f;
+    }
+}
+
+// Casts a shadow ray and returns the light visibility: 1 when unoccluded, 0 when fully occluded, tinted by transmissive occluders.
+// Opaque geometry is flagged as such in the acceleration structure, so only non-opaque candidates reach EvaluateShadowHit.
 float3 CastShadowRay(float3 hitPosition, float3 surfaceNormal, float3 directionToLight, float tracingDistance)
 {
     // No need to cast shadow rays for back-facing primitives if there is no transmission
@@ -128,6 +164,26 @@ float3 CastShadowRay(float3 hitPosition, float3 surfaceNormal, float3 directionT
     ray.TMin = 0.0f;
     ray.TMax = tracingDistance;
 
+#if SHADOW_RAY_USE_RAY_QUERY
+    // Inline traversal: the template flag commits the first opaque candidate and ends the search, while non-opaque
+    // candidates that do not occlude are left uncommitted (the equivalent of IgnoreHit) and traversal continues.
+    float3 visibility = float3(1.0f, 1.0f, 1.0f);
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+    query.TraceRayInline(SceneBVH, RAY_FLAG_NONE, 0xFF, ray);
+
+    while (query.Proceed())
+    {
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            EvaluateShadowHit(query.CandidateInstanceID(), query.CandidatePrimitiveIndex(), query.CandidateGeometryIndex(), query.CandidateTriangleBarycentrics(), visibility))
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+    }
+
+    return query.CommittedStatus() == COMMITTED_NOTHING ? visibility : float3(0.0f, 0.0f, 0.0f);
+#else // !SHADOW_RAY_USE_RAY_QUERY
+    // Dedicated hit group with simpler shaders for shadow rays
     ShadowRayPayload payload;
     payload.visibility = float3(1.0f, 1.0f, 1.0f);
 
@@ -135,66 +191,99 @@ float3 CastShadowRay(float3 hitPosition, float3 surfaceNormal, float3 directionT
     TraceRay(SceneBVH, rayFlags, 0xFF, SHADOW_RAY_INDEX, 0, SHADOW_RAY_INDEX, ray, payload);
 
     return payload.visibility;
+#endif // SHADOW_RAY_USE_RAY_QUERY
 }
 
-// Samples a random light from the pool of all lights using RIS (Resampled Importance Sampling)
-bool SampleLightRIS(inout uint rngState, float3 hitPosition, float3 surfaceNormal, inout LightConstants selectedSample, out float lightSampleWeight)
+// Light sample selected by SampleLightRIS. The sampled light point and its shadow ray result travel with the sample so
+// the shading step evaluates exactly the point that passed resampling. Re-drawing the point at shading time would apply
+// the visibility twice in penumbrae (once through the candidate surviving, once at shading) and darken soft shadows.
+struct LightSample
 {
-    lightSampleWeight = 1.0f;
+    LightConstants light;
+    float3 incidentVector; // Light to surface, as returned by GetLightData
+    float lightDistance;
+    float irradiance;
+    float3 visibility; // Resolved during resampling when SHADOW_RAY_IN_RIS, otherwise 1 and the caller casts the shadow ray
+    float weight; // RIS contribution weight: (1 / M) * sum(w_i) / pHat(selected)
+};
+
+// Samples a random light from the pool of all lights using RIS (Resampled Importance Sampling)
+bool SampleLightRIS(inout uint rngState, float3 hitPosition, float3 surfaceNormal, out LightSample lightSample)
+{
+    lightSample = (LightSample)0;
+    lightSample.visibility = float3(1.0f, 1.0f, 1.0f);
+    lightSample.weight = 1.0f;
+
     if (g_Lighting.lightCount == 0)
         return false;
 
-    selectedSample = g_Lighting.lights[0];
     if (g_Lighting.lightCount == 1)
+    {
+        lightSample.light = g_Lighting.lights[0];
+        float2 rand2 = float2(Rand(rngState), Rand(rngState));
+        GetLightData(lightSample.light, hitPosition, rand2, g_Global.enableSoftShadows, lightSample.incidentVector, lightSample.lightDistance, lightSample.irradiance);
+
+#if SHADOW_RAY_IN_RIS
+        lightSample.visibility = CastShadowRay(hitPosition, surfaceNormal, -lightSample.incidentVector, lightSample.lightDistance);
+        return any(lightSample.visibility > 0.0f);
+#else
         return true;
+#endif
+    }
 
     float totalWeights = 0.0f;
     float samplePdfG = 0.0f;
 
+    // A target light outside the uploaded range is ignored rather than read out of bounds
+    const bool forceTargetLight = g_Global.targetLight >= 0 && g_Global.targetLight < int(g_Lighting.lightCount);
+
+    // Reciprocal of the proposal PDF, the RIS weight of every candidate: the uniform draw has PDF 1 / lightCount, so the
+    // weight is lightCount. A forced target light is drawn with probability one, so its weight is 1; keeping lightCount
+    // there would render the light lightCount times brighter than its isolated contribution.
+    const float candidateWeight = forceTargetLight ? 1.0f : float(g_Lighting.lightCount);
+
     const uint candidateMax = min(g_Lighting.lightCount, RIS_CANDIDATES_LIGHTS);
-    for (int i = 0; i < candidateMax; i++)
+    for (uint i = 0; i < candidateMax; i++)
     {
-        uint randomLightIndex = g_Global.targetLight >= 0 ? g_Global.targetLight : min(g_Lighting.lightCount - 1, uint(Rand(rngState) * g_Lighting.lightCount));
+        uint randomLightIndex = forceTargetLight ? uint(g_Global.targetLight) : min(g_Lighting.lightCount - 1, uint(Rand(rngState) * g_Lighting.lightCount));
         LightConstants candidate = g_Lighting.lights[randomLightIndex];
 
-        // PDF of uniform distribution is (1 / light count). Reciprocal of that PDF (simply a light count) is a weight of this sample
-        float candidateWeight = float(g_Lighting.lightCount);
+        float3 incidentVector;
+        float lightDistance;
+        float irradiance;
+        float2 rand2 = float2(Rand(rngState), Rand(rngState));
+        GetLightData(candidate, hitPosition, rand2, g_Global.enableSoftShadows, incidentVector, lightDistance, irradiance);
 
-        {
-            float3 lightVector;
-            float lightDistance;
-            float irradiance;
-            float2 rand2 = float2(Rand(rngState), Rand(rngState));
-            GetLightData(candidate, hitPosition, rand2, g_Global.enableSoftShadows, lightVector, lightDistance, irradiance);
-
+        float3 visibility = float3(1.0f, 1.0f, 1.0f);
 #if SHADOW_RAY_IN_RIS
-            // Casting a shadow ray for all candidates here is expensive, but can significantly decrease noise
-            if (any(CastShadowRay(hitPosition, surfaceNormal, lightVector, lightDistance) > 0.0f))
-                continue;
+        // Casting a shadow ray for all candidates here is expensive, but can significantly decrease noise:
+        // occluded candidates get a zero target weight and can never be selected.
+        visibility = CastShadowRay(hitPosition, surfaceNormal, -incidentVector, lightDistance);
+        if (!any(visibility > 0.0f))
+            continue;
 #endif
 
-            float candidatePdfG = irradiance;
-            const float candidateRISWeight = candidatePdfG * candidateWeight;
+        const float candidatePdfG = irradiance;
+        const float candidateRISWeight = candidatePdfG * candidateWeight;
 
-            totalWeights += candidateRISWeight;
-            if (Rand(rngState) < (candidateRISWeight / totalWeights))
-            {
-                selectedSample = candidate;
-                samplePdfG = candidatePdfG;
-            }
+        totalWeights += candidateRISWeight;
+        if (Rand(rngState) < (candidateRISWeight / totalWeights))
+        {
+            lightSample.light = candidate;
+            lightSample.incidentVector = incidentVector;
+            lightSample.lightDistance = lightDistance;
+            lightSample.irradiance = irradiance;
+            lightSample.visibility = visibility;
+            samplePdfG = candidatePdfG;
         }
     }
 
     if (totalWeights == 0.0f)
-    {
         return false;
-    }
-    else
-    {
-        lightSampleWeight = (totalWeights / float(candidateMax)) / samplePdfG;
 
-        return true;
-    }
+    lightSample.weight = (totalWeights / float(candidateMax)) / samplePdfG;
+
+    return true;
 }
 
 // Calculates probability of selecting BRDF (specular or diffuse) using the approximate Fresnel term
@@ -273,6 +362,21 @@ void AnyHit(inout RayPayload payload : SV_RayPayload, in Attributes attrib : SV_
     // AcceptHit but continue looking for the closest hit
 }
 
+// Traces a path segment through the main hit group. With SER the trace is split so threads can be reordered by their
+// hit (shader and geometry) before the closest-hit/miss shaders run, which improves coherence of the shading work.
+void TracePathRay(RayDesc ray, uint rayFlags, inout RayPayload payload)
+{
+#if ENABLE_SER && TARGET_D3D12
+    dx::HitObject hit = dx::HitObject::TraceRay(SceneBVH, rayFlags, 0xFF, 0, 0, 0, ray, payload);
+    dx::MaybeReorderThread(hit);
+    dx::HitObject::Invoke(hit, payload);
+#elif ENABLE_SER // Vulkan
+    TraceRayReorderNV(SceneBVH, rayFlags, 0xFF, 0, 0, 0, ray, payload);
+#else // !ENABLE_SER
+    TraceRay(SceneBVH, rayFlags, 0xFF, 0, 0, 0, ray, payload);
+#endif // ENABLE_SER
+}
+
 // TODO: Delete this
 [shader("miss")]
 void ShadowMiss(inout ShadowRayPayload payload : SV_RayPayload)
@@ -288,28 +392,11 @@ void ClosestHitShadow(inout ShadowRayPayload payload : SV_RayPayload, in Attribu
 [shader("anyhit")]
 void AnyHitShadow(inout ShadowRayPayload payload : SV_RayPayload, in Attributes attrib : SV_IntersectionAttributes)
 {
-    GeometrySample geometry = GetGeometryFromHit(InstanceID(), PrimitiveIndex(), GeometryIndex(), attrib.uv, GeomAttr_TexCoord, t_InstanceData, t_GeometryData, t_MaterialConstants, t_BindlessBuffers);
-    MaterialSample material = SampleGeometryMaterial(geometry, 0, 0, 0, MatAttr_All, s_MaterialSampler, t_BindlessTextures);
-
-    switch (geometry.material.domain)
+    if (!EvaluateShadowHit(InstanceID(), PrimitiveIndex(), GeometryIndex(), attrib.uv, payload.visibility))
     {
-        case MaterialDomain_AlphaTested:
-        case MaterialDomain_TransmissiveAlphaTested:
-        {
-            if (material.opacity < geometry.material.alphaCutoff)
-                IgnoreHit();
-
-            break;
-        }
-
-        default:
-            // Modulate the visiblity by the material's transmission
-            payload.visibility *= (1.0f - material.opacity) * material.baseColor;
-            if (dot(payload.visibility, 0.333f) > 0.001f)
-                IgnoreHit();
-
-            break;
+        IgnoreHit();
     }
+
     AcceptHitAndEndSearch();
 }
 
@@ -385,6 +472,16 @@ void PathTraceRays()
     const bool isUpdatePass = false;
 #endif // (NRC_UPDATE || SHARC_UPDATE)
 
+    // NRC training paths are limited by the context's maxPathVertices, not by the rendering bounce count: the training
+    // vertex buffer holds exactly maxPathVertices entries per path, and NrcUpdateOnHit() only checks the limit at vertices
+    // it records. A delta vertex (mirror, pass-through glass) at the last allowed bounce skips that check, and a path that
+    // continues past it would write into the next path's entries. The loop below enforces the limit for every bounce
+#if NRC_UPDATE
+    const int bouncesMax = int(g_Lighting.nrcConstants.maxPathVertices);
+#else // !NRC_UPDATE
+    const int bouncesMax = g_Global.bouncesMax;
+#endif // NRC_UPDATE
+
     const uint2 launchIndex = DispatchRaysIndex().xy;
     const uint2 launchDimensions = DispatchRaysDimensions().xy;
     uint rngState = InitRNG(launchIndex, launchDimensions, g_Global.frameIndex);
@@ -446,14 +543,17 @@ void PathTraceRays()
         bool isDiffusePath = true; // Used by denoiser
         float hitDistance = 0.0f; // Used by denoiser
 
-        bool internalRay = false;
+        // Stack of IORs for the media the path is currently nested inside (bottom of stack is air, implicit).
+        // Tracked via front/back-face hits so overlapping/nested transmissive objects refract correctly.
+        float mediumIorStack[MEDIUM_STACK_DEPTH];
+        int mediumStackDepth = 0;
 
         int bounce;
         for (bounce = 0; true/* break from the middle */; bounce++)
         {
             uint rayFlags = RAY_FLAG_NONE;
             RayPayload payload;
-            TraceRay(SceneBVH, rayFlags, 0xFF, 0, 0, 0, ray, payload);
+            TracePathRay(ray, rayFlags, payload);
 
 #if SHARC_UPDATE
             // SHaRC handles radiance propagation per segment; no path throughput needed.
@@ -485,6 +585,9 @@ void PathTraceRays()
             GeometrySample geometry = GetGeometryFromHit(payload.instanceID, payload.primitiveIndex, payload.geometryIndex, payload.barycentrics, GeomAttr_All, t_InstanceData, t_GeometryData, t_MaterialConstants, t_BindlessBuffers);
             MaterialSample material = SampleGeometryMaterial(geometry, 0, 0, 0, MatAttr_All, s_MaterialSampler, t_BindlessTextures);
             material.emissiveColor = g_Global.enableEmissives ? material.emissiveColor : 0;
+            // Zeroing transmission here makes the toggle apply everywhere the material is used: lobe selection,
+            // indirect sample weights, direct lighting BRDF evaluation and SHaRC pass-through
+            material.transmission = g_Global.enableTransmission ? material.transmission : 0.0f;
 
             if (material.hasMetalRoughParams)
             {
@@ -510,6 +613,11 @@ void PathTraceRays()
 
             float3 hitPosition = ray.Origin + ray.Direction * payload.hitDistance;
 
+            // Transmissive surfaces are pass-through for both caches (see PASS_THROUGH_TRANSMISSION): the glass is neither
+            // cached nor queried and the path continues to the surfaces behind it. Both caches must agree on this so that
+            // NRC and SHaRC produce the same image through a window
+            const bool isCachePassThrough = material.transmission >= PASS_THROUGH_TRANSMISSION;
+
             // Construct NRCSurfaceData structure needed for creating a query point at this hit location
             NrcSurfaceAttributes surfaceAttributes = (NrcSurfaceAttributes)0;
             surfaceAttributes.encodedPosition = NrcEncodePosition(hitPosition, g_Lighting.nrcConstants);
@@ -518,7 +626,14 @@ void PathTraceRays()
             surfaceAttributes.diffuseReflectance = material.diffuseAlbedo;
             surfaceAttributes.shadingNormal = shadingNormal;
             surfaceAttributes.viewVector = viewVector;
-            surfaceAttributes.isDeltaLobe = (material.metalness == 1.0f && material.roughness == 0.0f); // Set to true for perfectly smooth surfaces
+            // NRC skips vertices flagged as delta lobes: no training vertex is written and no query is created there, the
+            // path's throughput and radiance keep accumulating into the previous segment, the vertex does not count towards
+            // the path's vertex count and the path spread is not grown across it. That is how NRC looks through mirrors, and
+            // it is exactly the pass-through behavior the transmissive surfaces need, so flag them the same way. Without
+            // this NRC caches and terminates on the glass itself, which the network cannot represent, and the image
+            // behind a window turns into a blur. Note that NRC only honors the flag with the termination heuristic
+            // enabled (every resolve mode but DirectCacheView) or with skipDeltaVertices set
+            surfaceAttributes.isDeltaLobe = (material.metalness == 1.0f && material.roughness == 0.0f) /* perfect mirrors */ || isCachePassThrough;
 
             NrcProgressState nrcProgressState = NrcUpdateOnHit(nrcContext, nrcPathState, surfaceAttributes, payload.hitDistance, bounce, throughput, sampleRadiance);
             if (nrcProgressState == NrcProgressState::TerminateImmediately)
@@ -552,7 +667,7 @@ void PathTraceRays()
             {
                 uint gridLevel = HashGridGetLevel(hitPosition, sharcParameters.hashGridParameters);
                 float voxelSize = HashGridGetVoxelSize(gridLevel, sharcParameters.hashGridParameters);
-                bool isValidHit = payload.hitDistance > voxelSize * sqrt(3.0f);
+                bool isValidHit = !isCachePassThrough && payload.hitDistance > voxelSize * sqrt(3.0f);
 
                 materialRoughnessPrev = min(materialRoughnessPrev, 0.99f);
                 float alpha = materialRoughnessPrev * materialRoughnessPrev;
@@ -585,42 +700,39 @@ void PathTraceRays()
 
             if (g_Global.enableLighting)
             {
-                // Evaluate direct light (next event estimation), start by sampling one light 
-                LightConstants light;
-                float lightWeight;
-
-                if (SampleLightRIS(rngState, hitPosition, geometryNormal, light, lightWeight))
+                // Evaluate direct light (next event estimation), start by sampling one light
+                LightSample lightSample;
+                if (SampleLightRIS(rngState, hitPosition, geometryNormal, lightSample))
                 {
-                    // Prepare data needed to evaluate the light
-                    float3 incidentVector;
-                    float lightDistance;
-                    float irradiance;
-                    float2 rand2 = float2(Rand(rngState), Rand(rngState));
-                    GetLightData(light, hitPosition, rand2, g_Global.enableSoftShadows, incidentVector, lightDistance, irradiance);
-                    float3 vectorToLight = -incidentVector;
+                    const float3 vectorToLight = -lightSample.incidentVector;
 
-                    // Cast shadow ray towards the selected light
-                    float3 lightVisibility = CastShadowRay(hitPosition, geometryNormal, vectorToLight, lightDistance);
-                    if (any(lightVisibility > 0.0f))
+#if !SHADOW_RAY_IN_RIS
+                    // Cast shadow ray towards the selected light (with SHADOW_RAY_IN_RIS the visibility was resolved during resampling)
+                    lightSample.visibility = CastShadowRay(hitPosition, geometryNormal, vectorToLight, lightSample.lightDistance);
+#endif
+                    if (any(lightSample.visibility > 0.0f))
                     {
                         // If light is not in shadow, evaluate BRDF and accumulate its contribution into radiance
                         // This is an entry point for evaluation of all other BRDFs based on selected configuration (for direct light)
-                        float3 lightContribution = evalCombinedBRDF(shadingNormal, vectorToLight, viewVector, material) * light.color * irradiance * lightWeight * lightVisibility;
+                        float3 lightContribution = evalCombinedBRDF(shadingNormal, vectorToLight, viewVector, material) * lightSample.light.color * lightSample.irradiance * lightSample.weight * lightSample.visibility;
                         sampleRadiance += lightContribution * throughput;
                     }
                 }
             }
 
+            // Emissive geometry has no next-event estimation (SampleLightRIS only samples analytic lights), so the
+            // BRDF-sampled hit is its only estimator. It must be counted at every vertex, including the last one,
+            // which is why this is placed before the max-bounce termination below.
+#if !(SHARC_UPDATE && SHARC_SEPARATE_EMISSIVE)
+            sampleRadiance += material.emissiveColor * throughput;
+#endif
+
             // Terminate the loop early on the last bounce (we don't need to sample the BRDF)
-            if (bounce == g_Global.bouncesMax - 1)
+            if (bounce == bouncesMax - 1)
             {
                 NrcSetDebugPathTerminationReason(nrcPathState, NrcDebugPathTerminationReason::MaxPathVertices);
                 break;
             }
-
-#if !(SHARC_UPDATE && SHARC_SEPARATE_EMISSIVE)
-            sampleRadiance += material.emissiveColor * throughput;
-#endif
 
             // Terminate the loop after the emissives and direct light contribution has been added if NRC CreateQuery call 
             // requested delayed termination. In case direct lighting is not being cached (radianceCacheDirect paramter is 
@@ -628,8 +740,24 @@ void PathTraceRays()
             if (nrcProgressState == NrcProgressState::TerminateAfterDirectLighting)
                 break;
 
-            if (!SharcUpdateHit(sharcParameters, sharcState, sharcHitData, sampleRadiance, Rand(rngState)))
+            if (isCachePassThrough)
+            {
+                // SHaRC has no notion of a delta vertex, so the pass-through is spelled out here: no cache entry for the
+                // glass itself, but the radiance found at this vertex (direct lighting on the glass, emissive) still
+                // belongs to the vertices before it. SharcUpdateMiss() propagates the radiance to the previous vertices
+                // without inserting an entry/modifying state. SharcSetThroughput() then keeps the chain intact, so those
+                // vertices also receive what's behind the glass.
+#if SHARC_UPDATE && SHARC_SEPARATE_EMISSIVE
+                // With separate emissive, SharcUpdateHit() adds sharcHitData.emissive to the propagated radiance itself
+                // (and keeps it out of the vertex's own entry). SharcUpdateMiss() does not, and so we account for it here.
+                sampleRadiance += material.emissiveColor * throughput;
+#endif
+                SharcUpdateMiss(sharcParameters, sharcState, sampleRadiance);
+            }
+            else if (!SharcUpdateHit(sharcParameters, sharcState, sharcHitData, sampleRadiance, Rand(rngState)))
+            {
                 break;
+            }
 
             // Russian roulette
             if (g_Global.enableRussianRoulette && NrcCanUseRussianRoulette(nrcPathState) && (bounce > BOUNCES_MIN))
@@ -652,25 +780,15 @@ void PathTraceRays()
                 brdfType = SPECULAR_TYPE;
                 throughput /= specularBrdfProbability;
             }
-            else if (g_Global.enableTransmission)
+            else if (Rand(rngState) < material.transmission)
             {
-                float transmissiveProbability = (1.0f - specularBrdfProbability) * material.transmission;
-
-                if (Rand(rngState) < material.transmission)
-                {
-                    brdfType = TRANSMISSIVE_TYPE;
-                    throughput /= transmissiveProbability;
-                }
-                else
-                {
-                    brdfType = DIFFUSE_TYPE;
-                    throughput /= (1.0f - specularBrdfProbability - transmissiveProbability);
-                }
+                brdfType = TRANSMISSIVE_TYPE;
+                throughput /= (1.0f - specularBrdfProbability) * material.transmission;
             }
             else
             {
                 brdfType = DIFFUSE_TYPE;
-                throughput /= (1.0f - specularBrdfProbability);
+                throughput /= (1.0f - specularBrdfProbability) * (1.0f - material.transmission);
             }
 
 #if SHARC_QUERY
@@ -686,16 +804,33 @@ void PathTraceRays()
                 {
                     u_OutputDepth[launchIndex] = dot(hitPosition - g_Lighting.view.matViewToWorld[3].xyz, g_Lighting.view.matViewToWorld[2].xyz);
                     u_OutputNormalRoughness[launchIndex] = float4(shadingNormal, material.roughness);
-                    // Motion vectors for static objects
+                    // Motion vectors: reproject where this surface point was on the previous frame (previous skinned
+                    // position and previous instance transform) with the previous view, so animated geometry
+                    // contributes its own motion and not only the camera's
                     {
+                        float3 hitPositionPrev = ComputePreviousHitPosition(geometry, payload.primitiveIndex, payload.barycentrics, t_BindlessBuffers);
+
                         float4 positionClip = mul(float4(hitPosition, 1.0f), g_Lighting.view.matWorldToClipNoOffset);
                         positionClip.xyz /= positionClip.w;
-                        float4 positionClipPrev = mul(float4(hitPosition, 1.0f), g_Lighting.viewPrev.matWorldToClipNoOffset);
-                        positionClipPrev.xyz /= positionClipPrev.w;
+                        float4 positionClipPrev = mul(float4(hitPositionPrev, 1.0f), g_Lighting.viewPrev.matWorldToClipNoOffset);
 
+                        // The depth delta is valid even when the point was behind the previous camera, and a negative
+                        // previous depth lets the denoiser reject history for it
                         float3 motionVector;
-                        motionVector.xy = (positionClipPrev.xy - positionClip.xy) * g_Lighting.view.clipToWindowScale;
                         motionVector.z = positionClipPrev.w - positionClip.w;
+
+                        if (positionClipPrev.w > 0.0f)
+                        {
+                            positionClipPrev.xy /= positionClipPrev.w;
+                            motionVector.xy = (positionClipPrev.xy - positionClip.xy) * g_Lighting.view.clipToWindowScale;
+                        }
+                        else
+                        {
+                            // No previous screen position exists; a zero vector would claim "same pixel, same depth" and
+                            // let unrelated history through, so point two screen sizes off-screen instead. The magnitude
+                            // stays finite and representable in the RGBA16_FLOAT target
+                            motionVector.xy = -2.0f * g_Lighting.view.viewportSize;
+                        }
 
                         u_OutputMotionVectors[launchIndex] = float4(motionVector, 0.0f);
                         u_OutputEmissive[launchIndex] = float4(sampleRadiance, 0.0f);
@@ -710,7 +845,22 @@ void PathTraceRays()
             // Run importance sampling of selected BRDF to generate reflecting ray direction
             float3 brdfWeight = float3(0.0f, 0.0f, 0.0f);
             float brdfPdf = 0.0f;
-            float refractiveIndex = 1.0f; // ior //1.1f;
+            float refractiveIndex = 1.0f;
+
+            // For a transmissive bounce, derive eta (ratio of the IOR of the medium the path is
+            // currently in over the IOR of the medium it's about to enter) from the medium stack,
+            // using the hit's front/back-facing state to tell entering a new medium apart from
+            // leaving the current one. This correctly handles nested/overlapping transmissive
+            // objects, where a single flag to check whether we're dealing with the inside of the glass would get out of sync.
+            bool enteringMedium = payload.IsFrontFacing();
+            if (brdfType == TRANSMISSIVE_TYPE)
+            {
+                float currentIor = (mediumStackDepth > 0) ? mediumIorStack[mediumStackDepth - 1] : 1.0f;
+                float targetIor = enteringMedium
+                    ? g_Global.transmissionIor
+                    : ((mediumStackDepth > 1) ? mediumIorStack[mediumStackDepth - 2] : 1.0f);
+                refractiveIndex = currentIor / targetIor;
+            }
 
             // Generates a new ray direction
             float2 rand2 = float2(Rand(rngState), Rand(rngState));
@@ -726,17 +876,25 @@ void PathTraceRays()
             bool transition = dot(geometryNormal, ray.Direction) <= 0.0f;
             ray.Origin = OffsetRay(hitPosition, transition ? -geometryNormal : geometryNormal);
 
-            // If we are internal, assume we will be leaving the object on a transition and air has an ior of ~1.0
-            if (internalRay)
+            // Only update the medium stack when the sampled direction actually crossed the surface. The transmissive
+            // lobe in evalIndirectCombinedBRDF() discards samples whose direction disagrees with the refraction/total
+            // internal reflection outcome using this same test, so for a surviving ray, 'transition' is true exactly
+            // when it was refracted; the check here is kept as a guard.
+            if (brdfType == TRANSMISSIVE_TYPE && transition)
             {
-                refractiveIndex = 1.0f / refractiveIndex;
+                if (enteringMedium)
+                {
+                    if (mediumStackDepth < MEDIUM_STACK_DEPTH)
+                        mediumIorStack[mediumStackDepth++] = g_Global.transmissionIor;
+                }
+                else if (mediumStackDepth > 0)
+                {
+                    mediumStackDepth--;
+                }
 
                 //if (g_Global.enableAbsorption)
                 //    throughput *= exp(-0.5f * payload.hitDistance); // Beers law of attenuation
             }
-
-            if (transition)
-                internalRay = !internalRay;
 
             if (g_Global.enableOcclusion)
                 throughput *= material.occlusion;
@@ -771,7 +929,7 @@ void PathTraceRays()
         float2 pixel = float2(DispatchRaysIndex().xy) + 0.5.xx;
         RayDesc ray = GeneratePinholeCameraRay(pixel / float2(launchDimensions), g_Lighting.view.matViewToWorld, g_Lighting.view.matViewToClip);
         RayPayload payload;
-        TraceRay(SceneBVH, 0, 0xFF, 0, 0, 0, ray, payload);
+        TracePathRay(ray, RAY_FLAG_NONE, payload);
 
         if (payload.Hit())
         {

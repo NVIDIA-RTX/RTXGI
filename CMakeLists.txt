@@ -53,7 +53,11 @@ function(CheckAndDownloadPackage NAME VERSION LOCAL_PATH URL ARCHIVE_TYPE)
     endif()
 endfunction()
 
-CheckAndDownloadPackage("Agility SDK" "v1.616.1" ${CMAKE_CURRENT_SOURCE_DIR}/External/AgilitySDK https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.616.1 "zip")
+# Agility SDK: the package version selects the download, the SDK version is what the samples export as D3D12SDKVersion.
+set(D3D12_AGILITY_SDK_PACKAGE_VERSION "1.619.6")
+set(D3D12_AGILITY_SDK_VERSION "619")
+CheckAndDownloadPackage("Agility SDK" "v${D3D12_AGILITY_SDK_PACKAGE_VERSION}" ${CMAKE_CURRENT_SOURCE_DIR}/External/AgilitySDK https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${D3D12_AGILITY_SDK_PACKAGE_VERSION} "zip")
+add_compile_definitions(RTXGI_D3D12_SDK_VERSION=${D3D12_AGILITY_SDK_VERSION})
 CheckAndDownloadPackage("DXC" "v1.7.2308" ${CMAKE_CURRENT_SOURCE_DIR}/External/dxc https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.7.2308/dxc_2023_08_14.zip "zip")
 
 # -----------------------------------------------------------------------------
@@ -127,6 +131,11 @@ unset(NVRHI_WITH_VULKAN CACHE)
 # Force Vulkan support
 option(DONUT_WITH_VULKAN "Enable the Vulkan version of Donut" ON)
 
+# Compile all SPIR-V shaders (Donut, NRD and the samples) with the DXC that ShaderMake downloads, which is also the one
+# used for DXIL, rather than with the DXC of whichever Vulkan SDK is installed. 
+set(SHADERMAKE_FIND_DXC_VK OFF CACHE BOOL "Find DXC in Vulkan SDK and populate 'SHADERMAKE_DXC_VK_PATH' variable" FORCE)
+unset(SHADERMAKE_DXC_VK_PATH CACHE)
+
 # Add projects
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/External/Donut)
 
@@ -134,11 +143,10 @@ message(STATUS "NVRHI Vulkan support " "${NVRHI_WITH_VULKAN}")
 message(STATUS "Donut Vulkan support " "${DONUT_WITH_VULKAN}")
 
 if(NVRHI_WITH_VULKAN OR NVRHI_WITH_DX12)
-    add_subdirectory(Samples/Pathtracer)
+    add_subdirectory(Samples)
     # Set Pathtracer sample project as a startup project
 	set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Pathtracer)
 endif()
-
 
 # Add SHARC includes to the solution
 set(SHARC_LIBRARY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/Sharc")

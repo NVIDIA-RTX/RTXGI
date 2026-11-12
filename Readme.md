@@ -31,9 +31,10 @@ RTXGI SDK provides an example integration (DX12 and Vulkan) of two state-of-the-
 ## Getting up and running
 
 ### Prerequisites
-Any DXR GPU for SHaRC **|** NV GPUs ≥ Turing (arch 70) for NRC **|** [CMake v3.24.3][CMake] **|** [Git LFS][LFS] **|** [Vulkan SDK 1.3.268.0][VKSDK] **|** [VS 2022][VS22] **|** Windows SDK ≥ 10.0.20348.0 **|** Driver ≥  617.42
+Any DXR GPU for SHaRC **|** NV GPUs ≥ Turing (arch 70) **|** [CMake v4.5.0][CMake] **|** [Git LFS][LFS] **|** [Vulkan SDK 1.4.363.1][VKSDK] **|** [VS 2022][VS22] **|** Windows SDK ≥ 10.0.20348.0
+
 ### Further steps
-- [Quick start guide][QuickStart] for building and running the pathtracer example.
+- [Quick start guide][QuickStart] for building and running the sample projects.
 - [NRC integration guide][NrcGuide] and the [SHaRC integration guide][SharcGuide] respectively.
 - [Changelog][ChangeLog] for release information.
 

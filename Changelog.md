@@ -1,5 +1,27 @@
 # RTXGI SDK Change Log
 
+## 2.9.0
+
+### RTXGI
+- Introduce the IndirectDiffuse sample: a deferred renderer that uses NRC or SHaRC for the indirect diffuse term, with shadow mapping, sky contribution and debug views.
+- Restructure the samples: code and shaders common to both samples now live in `Samples/Shared`.
+- Add Shader Execution Reordering (SER) support on D3D12 (Shader Model 6.9) and Vulkan (`VK_NV_ray_tracing_invocation_reorder`), selectable from the UI.
+- Add ACES and AgX tone mapping operators, and auto-exposure (enabled by default, also fed to DLSS-RR).
+- Support the sky color as the background color.
+- Update NRD to v4.18.0 
+- Update Agility SDK to v1.619.6.
+- Compile SPIR-V shaders with the same DXC used for DXIL instead of the one from the installed Vulkan SDK.
+- Bug fixes:
+  - Fixed the order in which emissive radiance is factored into the path contribution.
+  - Fixed refraction through transmissive surfaces, and unified the handling of transmission paths for NRC and SHaRC.
+  - Fixed motion vectors.
+  - Fixed shadow casting flags and light sampling (RIS).
+  - Fixed NRD and DLSS-RR temporal accumulation not being reset when required.
+  - Fixed ray origin offsetting.
+  - Fixed a resource state barrier reported by the enhanced barrier validation.
+  - Fixed UI scaling.
+  - Improved robustness: scene loading and NRD initialization failures are now handled, the `-camera` option is applied after the scene is loaded, and the SHaRC cache is reliably cleared after a scene change.
+
 ## 2.8.0
 
 ### RTXGI

@@ -59,10 +59,6 @@ public:
 
     std::shared_ptr<donut::engine::DirectionalLight> GetSunLight() const;
 
-    bool IsReloaded() const;
-
-    void ClearReloaded();
-
     void SetCameraIndex(int index);
 
 private:
@@ -71,6 +67,5 @@ private:
     std::string m_currentSceneName;
     std::shared_ptr<donut::engine::DirectionalLight> m_sunLight;
     std::shared_ptr<donut::engine::PointLight> m_headLight;
-    bool m_sceneReloaded = false;
     int m_cameraIndex = -1;
 };

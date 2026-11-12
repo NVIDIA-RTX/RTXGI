@@ -41,7 +41,6 @@ void SampleScene::OnLoaded(uint32_t frameIndex, UIData& ui, FirstPersonCamera& c
 {
     m_scene->FinishedLoading(frameIndex);
 
-    m_sceneReloaded = true;
     resetAccumulation = true;
     accumulatedFrameCount = 1;
     rebuildAS = true;
@@ -156,16 +155,6 @@ std::shared_ptr<donut::engine::Scene> SampleScene::GetScene() const
 std::shared_ptr<donut::engine::DirectionalLight> SampleScene::GetSunLight() const
 {
     return m_sunLight;
-}
-
-bool SampleScene::IsReloaded() const
-{
-    return m_sceneReloaded;
-}
-
-void SampleScene::ClearReloaded()
-{
-    m_sceneReloaded = false;
 }
 
 void SampleScene::SetCameraIndex(int index)

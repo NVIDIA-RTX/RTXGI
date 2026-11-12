@@ -21,7 +21,8 @@
 
 #include "UI.h"
 #include "Pipelines.h"
-#include "AccelStructBuilder.h"
+#include "PostProcess/AutoExposurePass.h"
+#include "Scene/AccelStructBuilder.h"
 #include "SampleScene.h"
 #include "RenderTargets.h"
 
@@ -80,6 +81,7 @@ public:
 
     void RebuildAccelerationStructure();
     void ResetAccumulation();
+    void ResetAutoExposure();
 
     donut::app::FirstPersonCamera* GetCamera();
 
@@ -99,6 +101,10 @@ private:
     nvrhi::GraphicsPipelineHandle m_tonemappingPSO;
     nvrhi::BindingLayoutHandle m_tonemappingBindingLayout;
     nvrhi::BindingSetHandle m_tonemappingBindingSet;
+    nvrhi::BufferHandle m_tonemappingConstantBuffer;
+
+    std::unique_ptr<AutoExposurePass> m_autoExposurePass;
+    bool m_autoExposureResetPending = true;
 
     nvrhi::BufferHandle m_constantBuffer;
     nvrhi::BufferHandle m_debugBuffer;
@@ -115,12 +121,14 @@ private:
     std::unique_ptr<donut::engine::BindingCache> m_bindingCache;
 
     float m_wallclockTime = 0.0f;
+    float m_frameTime = 0.0f;
     int m_frameIndex = 0;
 
     UIData& m_ui;
 
     std::unique_ptr<PlanarViewConstants> m_updatePassView;
     bool m_enableNrd = false;
+    bool m_enableSer = false; // Shader Execution Reordering state the current ray tracing pipelines were built with
 
     bool m_resetAccumulation;
     uint32_t m_accumulatedFrameCount;
@@ -145,6 +153,7 @@ private:
 #endif // ENABLE_NRC
 
 #if ENABLE_SHARC
+    bool m_sharcCacheNeedsClear = true;
     static const uint32_t m_sharcInvalidEntry = 0;
     uint32_t m_sharcEntriesNum = 0;
     nvrhi::BufferHandle m_sharcHashEntriesBuffer;

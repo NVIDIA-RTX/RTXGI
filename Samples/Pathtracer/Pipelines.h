@@ -70,7 +70,7 @@ public:
 
     void CreateCommon(nvrhi::IDevice* device, donut::engine::ShaderFactory& shaderFactory, nvrhi::GraphicsAPI api, const BindingLayouts& layouts);
 
-    bool CreateRayTracing(nvrhi::IDevice* device, donut::engine::ShaderFactory& shaderFactory, const BindingLayouts& layouts, bool enableNrd);
+    bool CreateRayTracing(nvrhi::IDevice* device, donut::engine::ShaderFactory& shaderFactory, const BindingLayouts& layouts, bool enableNrd, bool enableSer);
 
     Permutation& GetPermutation(Type t);
 

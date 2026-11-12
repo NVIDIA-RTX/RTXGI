@@ -19,10 +19,11 @@ struct GlobalConstants
     int enableBackFaceCull;
     int bouncesMax;
 
+    // Keep the scalar count above nrdHitDistanceParams a multiple of four: HLSL aligns float4 to 16 bytes, C++ does not.
     int frameIndex;
-    uint enableAccumulation;
-    float recipAccumulatedFrames;
-    float padding;
+    float throughputThreshold;
+    float padding0;
+    float padding1;
 
     int enableEmissives;
     int enableLighting;
@@ -39,11 +40,6 @@ struct GlobalConstants
     uint debugOutputMode;
     float intensityScale;
 
-    float throughputThreshold;
-    float exposureScale;
-    uint toneMappingOperator;
-    uint clamp;
-
     uint nrcEnableTerminationHeuristic;
     uint nrcSkipDeltaVertices;
     uint sharcMaterialDemodulation;
@@ -55,6 +51,9 @@ struct GlobalConstants
     float roughnessMax;
     float metalnessMin;
     float metalnessMax;
+
+    float transmissionIor;
+    float3 padding2;
 };
 
 #define EXIT_MAX_BOUNCE       0
@@ -65,5 +64,9 @@ struct GlobalConstants
 
 // Set to 1 to over-ride the UI
 #define USE_DEFAULT_SETTINGS 0
+
+// Shadow rays traverse inline with RayQuery (1) or through the shadow hit group (0). Shared with the host so that
+// initialization fails on a device without inline ray query support instead of loading shaders that require it.
+#define SHADOW_RAY_USE_RAY_QUERY 1
 
 #endif

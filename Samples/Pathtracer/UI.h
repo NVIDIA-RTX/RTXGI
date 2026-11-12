@@ -16,7 +16,8 @@
 #include <donut/app/imgui_renderer.h>
 #include <donut/app/imgui_console.h>
 
-#include "Defines.h"
+#include "Application/Defines.h"
+#include "PostProcess/AutoExposurePass.h"
 
 #if ENABLE_NRC
 #include "Nrc/NrcIntegration.h"
@@ -84,6 +85,15 @@ enum class ToneMappingOperator : uint32_t
 {
     Linear = 0,
     Reinhard = 1,
+    Aces = 2,
+    Agx = 3,
+};
+
+enum class AgxLook : uint32_t
+{
+    Default = 0,
+    Golden = 1,
+    Punchy = 2,
 };
 
 struct UIData
@@ -97,11 +107,11 @@ struct UIData
     int bouncesMax = 8;
     int accumulatedFrames = 1;
     int accumulatedFramesMax = 128;
-    float exposureAdjustment = 0.0f;
     float roughnessMin = 0.0f;
     float roughnessMax = 1.0f;
     float metalnessMin = 0.0f;
     float metalnessMax = 1.0f;
+    float transmissionIor = 1.5f;
     bool enableSky = true;
     bool enableEmissives = true;
     bool enableLighting = true;
@@ -113,7 +123,7 @@ struct UIData
     dm::float3 skyColor = dm::float3(0.5f, 0.75f, 1.0f);
     float skyIntensity = 8.0f;
     int samplesPerPixel = 1;
-    int targetLight = 0;
+    int targetLight = -1; // Index of the light forced as every RIS candidate ("Target this light?"); -1 samples all lights
     bool enableTonemapping = true;
     bool reloadShaders = false;
 
@@ -121,9 +131,19 @@ struct UIData
     DenoiserType denoiserType = DenoiserType::Accumulation;
     bool enableDenoiser = false;
 
-    ToneMappingOperator toneMappingOperator = ToneMappingOperator::Reinhard;
+    ToneMappingOperator toneMappingOperator = ToneMappingOperator::Aces;
     bool toneMappingClamp = true;
-    const char* toneMappingOperatorStrings = "Linear\0Reinhard\0";
+    const char* toneMappingOperatorStrings = "Linear\0Reinhard\0ACES\0AgX\0";
+    float reinhardWhitePoint = 3.0f; // Smallest luminance the extended Reinhard operator maps to white
+    AgxLook agxLook = AgxLook::Default;
+    const char* agxLookStrings = "Default\0Golden\0Punchy\0";
+    // On by default; use Lock or -noautoexposure when comparing GI techniques against a reference, since adaptation
+    // would hide brightness bias.
+    bool autoExposure = true;
+    bool autoExposureLock = false;
+    float exposureAdjustment = 0.0f;   // Manual exposure (EV), used while autoExposure is off
+    float exposureCompensation = 0.0f; // Bias (EV) on top of the metered exposure while autoExposure is on
+    AutoExposurePass::Settings autoExposureSettings;
 
 #if ENABLE_NRC
     bool nrcLearnIrradiance = true;
@@ -138,9 +158,11 @@ struct UIData
     uint32_t nrcTrainingHeight = 0;
 
     // Settings used by the path tracer
-    bool nrcSkipDeltaVertices = false;
+    // NRC skips delta-lobe vertices (mirrors, pass-through glass) whenever the termination heuristic is on, which is every
+    // resolve mode but DirectCacheView. Defaulting this on makes that debug view skip them as well, so it also looks
+    // through glass instead of showing the cache at the glass
+    bool nrcSkipDeltaVertices = true;
     float nrcTerminationHeuristicThreshold = 0.01f;
-    int nrcNumTrainingIterations = 1;
 #endif // ENABLE_NRC
 
 #if ENABLE_SHARC
@@ -160,6 +182,9 @@ struct UIData
 
     bool dlssSupported = false;
     bool dlssRayReconstructionSupported = false;
+
+    bool serSupported = false; // The SER shader permutations are built and the device can run them, see Pathtracer::Initialize
+    bool enableSer = true;
 
     std::shared_ptr<donut::engine::Material> selectedMaterial = nullptr;
     std::shared_ptr<donut::engine::SceneCamera> activeSceneCamera = nullptr;

@@ -63,8 +63,8 @@ void reblurPackData(in uint2 did : SV_DispatchThreadID)
             diffuseData.xyz /= diffuseAlbedo;
         }
 
-        float normalizedHitDistance = REBLUR_FrontEnd_GetNormHitDist(diffuseData.w, viewSpaceZ, g_Global.nrdHitDistanceParams);
-        diffuseData = REBLUR_FrontEnd_PackRadianceAndNormHitDist(diffuseData.xyz, normalizedHitDistance);
+        float normalizedHitDistance = REBLUR_FrontEnd_GetNormHitDist(diffuseData.w, viewSpaceZ, g_Global.nrdHitDistanceParams.xyz, 1.0f);
+        diffuseData = REBLUR_FrontEnd_PackRadianceAndNormHitDist(diffuseData.xyz, normalizedHitDistance, true);
         u_OutputDiffuseHitDistance[did] = diffuseData;
     }
 
@@ -85,13 +85,13 @@ void reblurPackData(in uint2 did : SV_DispatchThreadID)
             specularData.xyz /= specularAlbedo;
         }
 
-        float normalizedHitDistance = REBLUR_FrontEnd_GetNormHitDist(specularData.w, viewSpaceZ, g_Global.nrdHitDistanceParams, normalRoughness.w);
-        specularData = REBLUR_FrontEnd_PackRadianceAndNormHitDist(specularData.xyz, normalizedHitDistance);
+        float normalizedHitDistance = REBLUR_FrontEnd_GetNormHitDist(specularData.w, viewSpaceZ, g_Global.nrdHitDistanceParams.xyz, normalRoughness.w);
+        specularData = REBLUR_FrontEnd_PackRadianceAndNormHitDist(specularData.xyz, normalizedHitDistance, true);
         u_OutputSpecularHitDistance[did] = specularData;
     }
 #endif // ENABLE_SPECULAR_LOBE
 
-    normalRoughness = NRD_FrontEnd_PackNormalAndRoughness(normalRoughness.xyz, normalRoughness.w);
+    normalRoughness = NRD_FrontEnd_PackNormalAndRoughness(normalRoughness.xyz, normalRoughness.w, 0.0f);
     u_OutputNormalRoughness[did] = normalRoughness;
 }
 

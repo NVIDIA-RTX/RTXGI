@@ -6,6 +6,9 @@ This work is published from: Germany. */
 // This is a code sample accompanying the "Crash Course in BRDF Implementation" article
 // v1.1.1, January 2023
 
+// This copy diverges from upstream to support transmissive (glass) materials. The modified blocks are marked
+// "RTXGI 2 modification" and originate from the RTXGI 2 SDK: https://github.com/NVIDIA-RTX/RTXGI
+
 // -------------------------------------------------------------------------
 //    C++ compatibility
 // -------------------------------------------------------------------------
@@ -35,6 +38,7 @@ This work is published from: Germany. */
 // BRDF types
 #define DIFFUSE_TYPE      1
 #define SPECULAR_TYPE     2
+// RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): transmissive lobe, not present upstream
 #define TRANSMISSIVE_TYPE 3
 
 // PIs
@@ -145,12 +149,15 @@ This work is published from: Germany. */
 #define sampleSpecularHalfVector sampleSpecularHalfVectorVoid
 #endif
 
+// RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): 'specularRefractionPdf' is the PDF of the transmissive lobe, not present upstream
 #if MICROFACET_DISTRIBUTION == GGX
-#define specularSampleWeight specularSampleWeightGGXVNDF
-#define specularPdf          sampleGGXVNDFReflectionPdf
+#define specularSampleWeight  specularSampleWeightGGXVNDF
+#define specularPdf           sampleGGXVNDFReflectionPdf
+#define specularRefractionPdf sampleGGXVNDFRefractionPdf
 #else
-#define specularSampleWeight specularSampleWeightBeckmannWalter
-#define specularPdf          sampleBeckmannWalterReflectionPdf
+#define specularSampleWeight  specularSampleWeightBeckmannWalter
+#define specularPdf           sampleBeckmannWalterReflectionPdf
+#define specularRefractionPdf sampleBeckmannWalterRefractionPdf
 #endif
 
 #if DIFFUSE_BRDF == LAMBERTIAN
@@ -175,6 +182,9 @@ This work is published from: Germany. */
 //    Structures
 // -------------------------------------------------------------------------
 
+// RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): upstream's 'MaterialProperties' is replaced by the
+// framework's 'MaterialSample' (see SampleGeometryMaterial() in PathtracerUtils.hlsli) throughout this file. The
+// definition below is kept for reference only; note the added 'transmission' field used by the transmissive lobe
 #if 0
 struct MaterialSample
 {
@@ -188,7 +198,7 @@ struct MaterialSample
 	float roughness;
 	float3 baseColor;			// Native in metal-rough, derived in spec-gloss
 	float metalness;			// Native in metal-rough, derived in spec-gloss
-	float transmission;
+	float transmission;			// RTXGI 2 modification: not present upstream
 	bool hasMetalRoughParams;	// indicates that 'baseColor' and 'metalness' are valid
 };
 #endif
@@ -800,6 +810,24 @@ float sampleGGXVNDFReflectionPdf(float alpha, float alphaSquared, float NdotH, f
     return (GGX_D(max(0.00001f, alphaSquared), NdotH) * Smith_G1_GGX(alpha, NdotV, alphaSquared, NdotV * NdotV)) / (4.0f * NdotV);
 }
 
+// PDF of sampling a refracted vector L using 'sampleGGXVNDF'.
+// RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): not present upstream. The PDF of sampling the microfacet normal is
+// (G1 * D * VdotH / NdotV) as for reflection, but the jacobian of the refraction operator is |LdotH| / (eta * VdotH + LdotH)^2
+// instead of 1 / (4 * VdotH). 'eta' is the ratio of the incident over the transmitted index of refraction, and LdotH is negative
+// since the refracted ray lies on the other side of the microfacet.
+// Source: "Microfacet Models for Refraction through Rough Surfaces" by Walter et al., equation 17
+float sampleGGXVNDFRefractionPdf(float alpha, float alphaSquared, float NdotH, float NdotV, float VdotH, float LdotH, float eta)
+{
+    NdotH = max(0.00001f, NdotH);
+    NdotV = max(0.00001f, NdotV);
+    VdotH = max(0.00001f, VdotH);
+    // The denominator vanishes for index-matched media (eta == 1), where every microfacet refracts into the same direction
+    // and the PDF degenerates to a delta; the clamp keeps it finite
+    const float denominator = eta * VdotH + LdotH;
+    const float jacobian = abs(LdotH) / max(0.00001f, denominator * denominator);
+    return (GGX_D(max(0.00001f, alphaSquared), NdotH) * Smith_G1_GGX(alpha, NdotV, alphaSquared, NdotV * NdotV) * VdotH / NdotV) * jacobian;
+}
+
 // "Walter's trick" is an adjustment of alpha value for Walter's sampling to reduce maximal weight of sample to about 4
 // Source: "Microfacet Models for Refraction through Rough Surfaces" by Walter et al., page 8
 float waltersTrick(float alpha, float NdotV)
@@ -815,6 +843,16 @@ float sampleBeckmannWalterReflectionPdf(float alpha, float alphaSquared, float N
     NdotH = max(0.00001f, NdotH);
     LdotH = max(0.00001f, LdotH);
     return Beckmann_D(max(0.00001f, alphaSquared), NdotH) * NdotH / (4.0f * LdotH);
+}
+
+// PDF of sampling a refracted vector L using 'sampleBeckmannWalter'.
+// RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): not present upstream, see 'sampleGGXVNDFRefractionPdf' for the jacobian
+float sampleBeckmannWalterRefractionPdf(float alpha, float alphaSquared, float NdotH, float NdotV, float VdotH, float LdotH, float eta)
+{
+    NdotH = max(0.00001f, NdotH);
+    const float denominator = eta * VdotH + LdotH;
+    const float jacobian = abs(LdotH) / max(0.00001f, denominator * denominator);
+    return Beckmann_D(max(0.00001f, alphaSquared), NdotH) * NdotH * jacobian;
 }
 
 // Samples a microfacet normal for the Beckmann distribution using walter's method.
@@ -854,11 +892,15 @@ float specularSampleWeightBeckmannWalter(float alpha, float alphaSquared, float 
 
 // Samples a reflection ray from the rough surface using selected microfacet distribution and sampling method
 // Resulting weight includes multiplication by cosine (NdotL) term
-float3 sampleSpecularMicrofacet(float3 Vlocal, float alpha, float alphaSquared, float3 specularF0, float2 u, const float ior, OUT_PARAMETER(float3) weight)
+// RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): with a non-zero 'ior' the ray is refracted instead and
+// 'weight' is the transmitted share of the microfacet lobe, see below. 'totalInternalReflection' reports when the
+// refraction failed and the ray was reflected back into the medium instead. 'Hlocal' returns the sampled microfacet
+// normal, which the caller needs to evaluate the PDF of a refracted direction (unlike for reflection, it is not the
+// half vector of V and L)
+float3 sampleSpecularMicrofacet(float3 Vlocal, float alpha, float alphaSquared, float3 specularF0, float2 u, const float ior, OUT_PARAMETER(float3) weight, OUT_PARAMETER(bool) totalInternalReflection, OUT_PARAMETER(float3) Hlocal)
 {
 
     // Sample a microfacet normal (H) in local space
-    float3 Hlocal;
     if (alpha == 0.0f)
     {
         // Fast path for zero roughness (perfect reflection), also prevents NaNs appearing due to divisions by zeroes
@@ -873,10 +915,21 @@ float3 sampleSpecularMicrofacet(float3 Vlocal, float alpha, float alphaSquared, 
     // Reflect view direction to obtain light vector
     // float3 Llocal = reflect(-Vlocal, Hlocal);
     float3 Llocal;
+    // RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): upstream only reflects. A non-zero 'ior' refracts
+    // instead and handles total internal reflection, so this function also serves the transmissive lobe
+    totalInternalReflection = false;
     if (ior != 0.0f)
     {
         // Refract the view direction to obtain light vector
         Llocal = refract(-Vlocal, Hlocal, ior);
+
+        // refract() returns zero on total internal reflection: the ray is reflected back into the medium about the
+        // same microfacet normal instead
+        if (dot(Llocal, Llocal) == 0.0f)
+        {
+            Llocal = reflect(-Vlocal, Hlocal);
+            totalInternalReflection = true;
+        }
     }
     else
     {
@@ -884,18 +937,31 @@ float3 sampleSpecularMicrofacet(float3 Vlocal, float alpha, float alphaSquared, 
         Llocal = reflect(-Vlocal, Hlocal);
     }
 
-    // Note: HdotL is same as HdotV here
+    // Note: HdotL is same as HdotV for reflection. It is negative for a refracted ray, so the Fresnel term uses HdotV
     // Clamp dot products here to small value to prevent numerical instability. Assume that rays incident from below the hemisphere have been filtered
     float HdotL = max(0.00001f, min(1.0f, dot(Hlocal, Llocal)));
+    float HdotV = max(0.00001f, min(1.0f, dot(Hlocal, Vlocal)));
     const float3 Nlocal = float3(0.0f, 0.0f, 1.0f);
     float NdotL = max(0.00001f, min(1.0f, dot(Nlocal, Llocal)));
     float NdotV = max(0.00001f, min(1.0f, dot(Nlocal, Vlocal)));
     float NdotH = max(0.00001f, min(1.0f, dot(Nlocal, Hlocal)));
-    float3 F = evalFresnel(specularF0, shadowedF90(specularF0), HdotL);
+    float3 F = evalFresnel(specularF0, shadowedF90(specularF0), HdotV);
 
-    // Calculate weight of the sample specific for selected sampling method
-    // (this is microfacet BRDF divided by PDF of sampling method - notice how most terms cancel out)
-    weight = F * specularSampleWeight(alpha, alphaSquared, NdotL, NdotV, HdotL, NdotH);
+    if (ior != 0.0f)
+    {
+        // RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): transmitted share of the microfacet lobe. The
+        // specular lobe reflects F with the same half-vector, so the two lobes sum to one. At total internal reflection
+        // the share that could not refract is reflected instead; Schlick's F does not reach 1 there, so weighting this
+        // lobe by (1 - F) rather than 1 is what keeps the sum of both lobes at one over repeated internal bounces.
+        // The masking-shadowing weight is only valid for the reflected ray: for a refracted ray NdotL is clamped above
+        weight = (float3(1.0f, 1.0f, 1.0f) - F) * (totalInternalReflection ? specularSampleWeight(alpha, alphaSquared, NdotL, NdotV, HdotL, NdotH) : 1.0f);
+    }
+    else
+    {
+        // Calculate weight of the sample specific for selected sampling method
+        // (this is microfacet BRDF divided by PDF of sampling method - notice how most terms cancel out)
+        weight = F * specularSampleWeight(alpha, alphaSquared, NdotL, NdotV, HdotL, NdotH);
+    }
 
     return Llocal;
 }
@@ -986,7 +1052,10 @@ float3 evalCombinedBRDF(float3 N, float3 L, float3 V, MaterialSample material)
 
     // Eval specular and diffuse BRDFs
     float3 specular = evalSpecular(data);
-    float3 diffuse = evalDiffuse(data);
+    // RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): account for material transmission.
+    // The diffuse lobe only carries the non-transmitted part; the transmitted part has no direct
+    // lighting contribution here (light reaching the surface through the glass is handled by the shadow ray visibility)
+    float3 diffuse = evalDiffuse(data) * (1.0f - material.transmission);
 
     // Combine specular and diffuse layers
 #if COMBINE_BRDFS_WITH_FRESNEL
@@ -1045,27 +1114,46 @@ bool evalIndirectCombinedBRDF(
 
     float3 rayDirectionLocal = float3(0.0f, 0.0f, 0.0f);
 
+    // RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): transmissive lobe, not present upstream.
     // Transmissive/refraction BRDFs are essentially the same as specular, but along the view vector
     if (brdfType == TRANSMISSIVE_TYPE)
     {
         const BrdfData data = prepareBRDFData(Nlocal, float3(0.0f, 0.0f, 1.0f) /* unused L vector */, Vlocal, material);
-        rayDirectionLocal = sampleSpecular(Vlocal, data.alpha, data.alphaSquared, data.specularF0, u, refractiveIndex, sampleWeight);
+        bool totalInternalReflection;
+        float3 Hlocal;
+        rayDirectionLocal = sampleSpecular(Vlocal, data.alpha, data.alphaSquared, data.specularF0, u, refractiveIndex, sampleWeight, totalInternalReflection, Hlocal);
 
-        // urgh - please fix
-        sampleWeight = material.baseColor * dot(rayDirectionLocal, -Vlocal);
+        // Transform sampled direction Llocal back to V vector space
+        rayDirection = normalize(rotatePoint(invertRotation(qRotationToZ), rayDirectionLocal));
 
-        if ((rayDirectionLocal.x == 0.0f) && (rayDirectionLocal.y == 0.0f) && (rayDirectionLocal.z == 0.0f))
+        // A rough microfacet can refract a ray that ends up on the incident side of the surface, or reflect one (total
+        // internal reflection) that ends up behind it. Discard such samples, like the reflection lobes do below for
+        // directions under the hemisphere. This is tested against the geometry normal, the same way the path tracer
+        // decides whether the ray crossed the surface, so a surviving ray is guaranteed to cross exactly when it was
+        // refracted and to stay in the current medium exactly when it was reflected
+        bool crossesSurface = dot(geometryNormal, rayDirection) <= 0.0f;
+        if (crossesSurface == totalInternalReflection)
         {
-            // total internal reflection
             return false;
         }
-        else
-        {
-            // Transform sampled direction Llocal back to V vector space
-            rayDirection = normalize(rotatePoint(invertRotation(qRotationToZ), rayDirectionLocal));
 
-            return true;
-        }
+        // sampleWeight holds the transmitted share of the microfacet lobe. Scale it by the transmissive share of the
+        // lobe mixture, and tint by baseColor only when the ray actually passed through the surface (the tint
+        // approximates absorption through the slab, nothing was transmitted at total internal reflection)
+        sampleWeight *= material.transmission * (totalInternalReflection ? float3(1.0f, 1.0f, 1.0f) : material.baseColor);
+
+        // Solid angle PDF of the sampled direction, consumed by NRC's path spread heuristic (a PDF of zero would grow the
+        // spread to infinity and terminate the path at the next vertex). The refracted direction is a function of the
+        // sampled microfacet normal, so its PDF is the microfacet normal's PDF times the jacobian of the refraction. At
+        // total internal reflection the ray was reflected about that same microfacet normal, so the reflection PDF
+        // applies. As for the other lobes, this excludes the probability of having selected the lobe
+        const float NdotH = Hlocal.z;
+        const float VdotH = dot(Vlocal, Hlocal);
+        const float LdotH = dot(rayDirectionLocal, Hlocal);
+        pdf = totalInternalReflection ? specularPdf(data.alpha, data.alphaSquared, NdotH, data.NdotV, LdotH)
+                                      : specularRefractionPdf(data.alpha, data.alphaSquared, NdotH, data.NdotV, VdotH, LdotH, refractiveIndex);
+
+        return true;
     }
     else if (brdfType == DIFFUSE_TYPE)
     {
@@ -1074,8 +1162,10 @@ bool evalIndirectCombinedBRDF(
         rayDirectionLocal = sampleHemisphere(u);
         const BrdfData data = prepareBRDFData(Nlocal, rayDirectionLocal, Vlocal, material);
 
-        // Function 'diffuseTerm' is predivided by PDF of sampling the cosine weighted hemisphere
-        sampleWeight = data.diffuseReflectance * diffuseTerm(data);
+        // Function 'diffuseTerm' is predivided by PDF of sampling the cosine weighted hemisphere.
+        // RTXGI 2 modification (https://github.com/NVIDIA-RTX/RTXGI): the diffuse lobe only carries the
+        // non-transmitted share of the lobe mixture.
+        sampleWeight = data.diffuseReflectance * diffuseTerm(data) * (1.0f - material.transmission);
 
 #if COMBINE_BRDFS_WITH_FRESNEL
         // Sample a half-vector of specular BRDF. Note that we're reusing random variable 'u' here, but correctly it should be an new independent random number
@@ -1090,7 +1180,9 @@ bool evalIndirectCombinedBRDF(
     else if (brdfType == SPECULAR_TYPE)
     {
         BrdfData data = prepareBRDFData(Nlocal, float3(0.0f, 0.0f, 1.0f) /* unused L vector */, Vlocal, material);
-        rayDirectionLocal = sampleSpecular(Vlocal, data.alpha, data.alphaSquared, data.specularF0, u, 0.0f, sampleWeight);
+        bool unusedTotalInternalReflection;
+        float3 unusedHlocal;
+        rayDirectionLocal = sampleSpecular(Vlocal, data.alpha, data.alphaSquared, data.specularF0, u, 0.0f, sampleWeight, unusedTotalInternalReflection, unusedHlocal);
 
         setBRDFDataLightDirection(data, rayDirectionLocal);
         pdf = specularPdf(data.alpha, data.alphaSquared, data.NdotH, data.NdotV, data.LdotH);

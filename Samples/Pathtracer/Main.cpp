@@ -49,6 +49,22 @@ void InjectFeatures(VkDeviceCreateInfo& info)
     info.pEnabledFeatures = nullptr;
     deviceFeatures.pNext = (void*)info.pNext;
     info.pNext = &deviceFeatures;
+
+#if RTXGI_HAS_SER_SHADERS_SPIRV
+    // Shader Execution Reordering: the extension is requested as optional, so it is only in the list when the device
+    // supports it, in which case the feature is guaranteed to be available.
+    static VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV invocationReorderFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV };
+    for (uint32_t i = 0; i < info.enabledExtensionCount; ++i)
+    {
+        if (!strcmp(info.ppEnabledExtensionNames[i], VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME))
+        {
+            invocationReorderFeatures.rayTracingInvocationReorder = VK_TRUE;
+            invocationReorderFeatures.pNext = deviceFeatures.pNext;
+            deviceFeatures.pNext = &invocationReorderFeatures;
+            break;
+        }
+    }
+#endif // RTXGI_HAS_SER_SHADERS_SPIRV
 }
 } // namespace
 
@@ -119,6 +135,11 @@ int main(int __argc, const char** __argv)
             deviceParams.requiredVulkanDeviceExtensions.push_back(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME);
             deviceParams.requiredVulkanDeviceExtensions.push_back(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
         }
+
+#if RTXGI_HAS_SER_SHADERS_SPIRV
+        // Shader Execution Reordering. Optional: the sample checks at runtime whether the device provides it.
+        deviceParams.optionalVulkanDeviceExtensions.push_back(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+#endif // RTXGI_HAS_SER_SHADERS_SPIRV
 
 #if DONUT_WITH_DLSS
         donut::render::DLSS::GetRequiredVulkanExtensions(deviceParams.optionalVulkanInstanceExtensions, deviceParams.optionalVulkanDeviceExtensions);

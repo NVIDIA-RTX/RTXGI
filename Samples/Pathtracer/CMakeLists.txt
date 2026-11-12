@@ -12,15 +12,10 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../../External/Donut/compileshaders.cmake)
 
 file(GLOB shaders "Shaders/*.hlsl" "Shaders/*.hlsli")
 file(GLOB sources "*.cpp" "*.h")
-file(GLOB nrc_sources "Nrc/*.cpp" "Nrc/*.h")
 file(GLOB nrd_sources "Nrd/*.cpp" "Nrd/*.h")
 
 set(project Pathtracer)
 set(folder "Samples/Pathtracer")
-
-option (NRD_EMBEDS_SPIRV_SHADERS "NRD embeds SPIRV shaders" OFF)
-option (NRD_EMBEDS_DXIL_SHADERS "NRD embeds DXIL shaders" OFF)
-option (NRD_EMBEDS_DXBC_SHADERS "NRD embeds DXBC shaders" OFF)
 
 
 # Is the NRC package a dev package (internal), or production
@@ -51,11 +46,18 @@ endif()
 # Set SHARC includes
 set(SHARC_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../Libraries)
 
+# Shaders shared between the samples live next to the shared C++; the sample directory is on the path too so a
+# shared shader can include this sample's constant buffer headers.
+set(SHARED_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../Shared/Shaders)
+set(SHADER_INCLUDE_ARGS "-I ${SHARED_SHADER_DIR} -I ${CMAKE_CURRENT_SOURCE_DIR} -I ${NRC_DIR}/include -I ${SHARC_INCLUDE_DIR}/Sharc/include -I ${NRD_PATH}/Shaders")
+
 # Shader Model 6_6 requires Agility SDK on Windows 10.
+# RTXGI_SER_SHADERMAKE_DEFINE_<format> enables the Shader Execution Reordering block in Shaders.cfg for the shader
+# formats whose compiler can build it (see Samples/CMakeLists.txt).
 if(DONUT_WITH_VULKAN)
-    set (SHADERMAKE_GENERAL_ARGS_SPIRV "--shaderModel 6_6 -I ${NRC_DIR}/include -I ${SHARC_INCLUDE_DIR}/Sharc/include --vulkanMemoryLayout dx")
+    set (SHADERMAKE_GENERAL_ARGS_SPIRV "--shaderModel 6_6 ${SHADER_INCLUDE_ARGS} --vulkanMemoryLayout dx ${RTXGI_SER_SHADERMAKE_DEFINE_SPIRV}")
 endif()
-set (SHADERMAKE_GENERAL_ARGS_DXIL "--shaderModel 6_6 --platform DXIL --WX --PDB -I ${NRC_DIR}/include -I ${SHARC_INCLUDE_DIR}/Sharc/include")
+set (SHADERMAKE_GENERAL_ARGS_DXIL "--shaderModel 6_6 --platform DXIL --WX --PDB ${SHADER_INCLUDE_ARGS} ${RTXGI_SER_SHADERMAKE_DEFINE_DXIL}")
 
 donut_compile_shaders(
         TARGET ${project}_shaders
@@ -68,8 +70,13 @@ donut_compile_shaders(
         SHADERMAKE_OPTIONS_DXIL ${SHADERMAKE_GENERAL_ARGS_DXIL}
 )
 
-add_executable(${project} WIN32 ${sources} ${nrc_sources} ${nrd_sources})
-target_link_libraries(${project} donut_render donut_app donut_engine NRD)
+add_executable(${project} WIN32 ${sources} ${nrd_sources})
+# Tells the sample which SER shader permutations exist; whether the device can run them is decided at runtime.
+target_compile_definitions(${project} PRIVATE
+    RTXGI_HAS_SER_SHADERS_DXIL=$<BOOL:${RTXGI_SER_SHADERS_DXIL}>
+    RTXGI_HAS_SER_SHADERS_SPIRV=$<BOOL:${RTXGI_SER_SHADERS_SPIRV}>
+)
+target_link_libraries(${project} donut_render donut_app donut_engine NRD SharedApplication SharedNrc SharedScene SharedPostProcess)
 add_dependencies(${project} ${project}_shaders nrd_shaders)
 set_target_properties(${project} PROPERTIES FOLDER ${folder})
 
@@ -148,12 +155,15 @@ if(DONUT_WITH_VULKAN AND SETUP_NRC_WITH_VULKAN)
 endif()
 
 if (DLSS_SHARED_LIBRARY_PATH)
+    string(REPLACE "$<IF:$<CONFIG:Debug>,dev,rel>" "rel" dlss_shared_library_path "${DLSS_SHARED_LIBRARY_PATH}")
+    string(REPLACE "$<IF:$<CONFIG:Debug>,dev,rel>" "rel" dlss_rr_shared_library_path "${DLSS_RR_SHARED_LIBRARY_PATH}")
+
     add_custom_command(TARGET ${project} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${DLSS_SHARED_LIBRARY_PATH}"
+        "${dlss_shared_library_path}"
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/")
     add_custom_command(TARGET ${project} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${DLSS_RR_SHARED_LIBRARY_PATH}"
+        "${dlss_rr_shared_library_path}"
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/")
 endif()

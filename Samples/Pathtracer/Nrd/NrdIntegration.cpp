@@ -10,13 +10,14 @@
 
 #include "NrdIntegration.h"
 
-static_assert(NRD_VERSION_MAJOR >= 4 && NRD_VERSION_MINOR >= 0, "Unsupported NRD version!");
+static_assert(NRD_VERSION_MAJOR > 4 || (NRD_VERSION_MAJOR == 4 && NRD_VERSION_MINOR >= 18), "Unsupported NRD version!");
 
 #include "../RenderTargets.h"
 #include <nvrhi/utils.h>
 #include <donut/core/math/math.h>
 #include <donut/engine/View.h>
 #include <donut/engine/ShaderFactory.h>
+#include <algorithm>
 #include <sstream>
 #include <donut/core/log.h>
 
@@ -117,6 +118,28 @@ static nvrhi::Format GetNvrhiFormat(nrd::Format format)
     }
 }
 
+// NRD reports each pipeline's shader as "fileName|macro1=value1|macro2=value2..."; the macros select the
+// ShaderMake permutation compiled from NRD's own Shaders.cfg.
+static std::string ParseShaderIdentifier(const char* shaderIdentifier, std::vector<donut::engine::ShaderMacro>& macros)
+{
+    std::stringstream stream(shaderIdentifier);
+
+    std::string fileName;
+    std::getline(stream, fileName, '|');
+
+    std::string macro;
+    while (std::getline(stream, macro, '|'))
+    {
+        const size_t separator = macro.find('=');
+        if (separator == std::string::npos)
+            macros.emplace_back(macro, "1");
+        else
+            macros.emplace_back(macro.substr(0, separator), macro.substr(separator + 1));
+    }
+
+    return fileName;
+}
+
 NrdIntegration::NrdIntegration(nvrhi::IDevice* device, nrd::Denoiser denoiser)
     : m_device(device), m_initialized(false), m_instance(nullptr), m_denoiser(denoiser), m_bindingCache(device), m_identifier(0)
 {
@@ -124,14 +147,12 @@ NrdIntegration::NrdIntegration(nvrhi::IDevice* device, nrd::Denoiser denoiser)
 
 NrdIntegration::~NrdIntegration()
 {
-    if (m_initialized)
+    if (m_instance)
         nrd::DestroyInstance(*m_instance);
 }
 
 bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::ShaderFactory& shaderFactory)
 {
-    const nrd::LibraryDesc& libraryDesc = nrd::GetLibraryDesc();
-
     const nrd::DenoiserDesc denoiserDescs[] = { { m_identifier, m_denoiser } };
 
     nrd::InstanceCreationDesc instanceCreationDesc = {};
@@ -142,7 +163,7 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
     if (result != nrd::Result::SUCCESS)
         return false;
 
-    const nrd::InstanceDesc& instanceDesc = nrd::GetInstanceDesc(*m_instance);
+    const nrd::InstanceDesc& instanceDesc = *nrd::GetInstanceDesc(*m_instance);
 
     const nvrhi::BufferDesc constantBufferDesc =
         nvrhi::utils::CreateVolatileConstantBufferDesc(instanceDesc.constantBufferMaxDataSize, "NrdConstantBuffer", instanceDesc.descriptorPoolDesc.setsMaxNum * 4);
@@ -184,15 +205,49 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
         m_samplers.push_back(sampler);
     }
 
+    // NRD keeps the constant buffer and samplers in a register space of their own, shared by every pipeline.
+    // Mapping register spaces onto descriptor sets matches how DXC lays out the SPIR-V.
+    nvrhi::BindingLayoutDesc sharedLayoutDesc;
+    sharedLayoutDesc.visibility = nvrhi::ShaderType::Compute;
+    sharedLayoutDesc.registerSpace = instanceDesc.constantBufferAndSamplersSpaceIndex;
+    sharedLayoutDesc.registerSpaceIsDescriptorSet = true;
+    sharedLayoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(instanceDesc.constantBufferRegisterIndex));
+
+    nvrhi::BindingSetDesc sharedSetDesc;
+    sharedSetDesc.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(instanceDesc.constantBufferRegisterIndex, m_constantBuffer));
+
+    for (uint32_t samplerIndex = 0; samplerIndex < instanceDesc.samplersNum; samplerIndex++)
+    {
+        const uint32_t slot = instanceDesc.samplersBaseRegisterIndex + samplerIndex;
+        sharedLayoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(slot));
+        sharedSetDesc.bindings.push_back(nvrhi::BindingSetItem::Sampler(slot, m_samplers[samplerIndex]));
+    }
+
+    m_sharedBindingLayout = m_device->createBindingLayout(sharedLayoutDesc);
+
+    if (!m_sharedBindingLayout)
+    {
+        assert(!"Cannot create the NRD shared binding layout");
+        return false;
+    }
+
+    m_sharedBindingSet = m_device->createBindingSet(sharedSetDesc, m_sharedBindingLayout);
+
+    if (!m_sharedBindingSet)
+    {
+        assert(!"Cannot create the NRD shared binding set");
+        return false;
+    }
+
     for (uint32_t pipelineIndex = 0; pipelineIndex < instanceDesc.pipelinesNum; pipelineIndex++)
     {
         const nrd::PipelineDesc& nrdPipelineDesc = instanceDesc.pipelines[pipelineIndex];
 
-        std::string fileName = std::string("nrd/RayTracingDenoiser/Shaders/Source/") + nrdPipelineDesc.shaderFileName;
-        std::vector<donut::engine::ShaderMacro> macros = { { "NRD_COMPILER_DXC", "1" }, { "NRD_NORMAL_ENCODING", "2" }, { "NRD_ROUGHNESS_ENCODING", "1" } };
+        std::vector<donut::engine::ShaderMacro> macros;
+        const std::string fileName = "nrd/" + ParseShaderIdentifier(nrdPipelineDesc.shaderIdentifier, macros);
 
         NrdPipeline pipeline;
-        pipeline.shader = shaderFactory.CreateShader(fileName.c_str(), "main", &macros, nvrhi::ShaderType::Compute);
+        pipeline.shader = shaderFactory.CreateShader(fileName.c_str(), instanceDesc.shaderEntryPoint, &macros, nvrhi::ShaderType::Compute);
 
         if (!pipeline.shader)
         {
@@ -202,48 +257,29 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
 
         nvrhi::BindingLayoutDesc layoutDesc;
         layoutDesc.visibility = nvrhi::ShaderType::Compute;
+        layoutDesc.registerSpace = instanceDesc.resourcesSpaceIndex;
+        layoutDesc.registerSpaceIsDescriptorSet = true;
 
-        nvrhi::BindingLayoutItem constantBufferItem = {};
-        constantBufferItem.type = nvrhi::ResourceType::VolatileConstantBuffer;
-        constantBufferItem.slot = instanceDesc.constantBufferRegisterIndex;
-        constantBufferItem.setSize(1);
-        layoutDesc.bindings.push_back(constantBufferItem);
-
-        assert(instanceDesc.samplersSpaceIndex == 0);
-        for (uint32_t samplerIndex = 0; samplerIndex < instanceDesc.samplersNum; samplerIndex++)
+        for (uint32_t rangeIndex = 0; rangeIndex < nrdPipelineDesc.resourceRangesNum; rangeIndex++)
         {
-            // const nrd::StaticSamplerDesc& nrdStaticSampler = denoiserDesc.samplers[samplerIndex];
+            const nrd::ResourceRangeDesc& range = nrdPipelineDesc.resourceRanges[rangeIndex];
 
-            nvrhi::BindingLayoutItem samplerItem = {};
-            samplerItem.type = nvrhi::ResourceType::Sampler;
-            samplerItem.slot = instanceDesc.samplersBaseRegisterIndex + samplerIndex;
-            samplerItem.setSize(1);
-            layoutDesc.bindings.push_back(samplerItem);
-        }
-
-        for (uint32_t descriptorRangeIndex = 0; descriptorRangeIndex < nrdPipelineDesc.resourceRangesNum; descriptorRangeIndex++)
-        {
-            const nrd::ResourceRangeDesc& nrdDescriptorRange = nrdPipelineDesc.resourceRanges[descriptorRangeIndex];
-
-            nvrhi::BindingLayoutItem resourceItem = {};
-            switch (nrdDescriptorRange.descriptorType)
+            for (uint32_t descriptorOffset = 0; descriptorOffset < range.descriptorsNum; descriptorOffset++)
             {
-            case nrd::DescriptorType::TEXTURE:
-                resourceItem.type = nvrhi::ResourceType::Texture_SRV;
-                break;
-            case nrd::DescriptorType::STORAGE_TEXTURE:
-                resourceItem.type = nvrhi::ResourceType::Texture_UAV;
-                break;
-            default:
-                assert(!"Unknown NRD descriptor type");
-                break;
-            }
+                const uint32_t slot = instanceDesc.resourcesBaseRegisterIndex + descriptorOffset;
 
-            for (uint32_t descriptorOffset = 0; descriptorOffset < nrdDescriptorRange.descriptorsNum; descriptorOffset++)
-            {
-                resourceItem.slot = nrdDescriptorRange.baseRegisterIndex + descriptorOffset;
-                resourceItem.setSize(1);
-                layoutDesc.bindings.push_back(resourceItem);
+                switch (range.descriptorType)
+                {
+                case nrd::DescriptorType::TEXTURE:
+                    layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Texture_SRV(slot));
+                    break;
+                case nrd::DescriptorType::STORAGE_TEXTURE:
+                    layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(slot));
+                    break;
+                default:
+                    assert(!"Unknown NRD descriptor type");
+                    return false;
+                }
             }
         }
 
@@ -256,7 +292,7 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
         }
 
         nvrhi::ComputePipelineDesc pipelineDesc;
-        pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
+        pipelineDesc.bindingLayouts = { pipeline.bindingLayout, m_sharedBindingLayout };
         pipelineDesc.CS = pipeline.shader;
         pipeline.pipeline = m_device->createComputePipeline(pipelineDesc);
 
@@ -287,9 +323,11 @@ bool NrdIntegration::Initialize(uint32_t width, uint32_t height, donut::engine::
         std::stringstream ss;
         ss << "NRD " << (isPermanent ? "Permanent" : "Transient") << "Texture [" << (isPermanent ? i : i - instanceDesc.permanentPoolSize) << "]";
 
+        const uint32_t downsampleFactor = std::max<uint32_t>(nrdTextureDesc.downsampleFactor, 1);
+
         nvrhi::TextureDesc textureDesc;
-        textureDesc.width = width;
-        textureDesc.height = height;
+        textureDesc.width = (width + downsampleFactor - 1) / downsampleFactor;
+        textureDesc.height = (height + downsampleFactor - 1) / downsampleFactor;
         textureDesc.format = format;
         textureDesc.dimension = nvrhi::TextureDimension::Texture2D;
         textureDesc.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -385,7 +423,7 @@ void NrdIntegration::RunDenoiserPasses(
     uint32_t dispatchDescNum = 0;
     nrd::GetComputeDispatches(*m_instance, &m_identifier, 1, dispatchDescs, dispatchDescNum);
 
-    const nrd::InstanceDesc& instanceDesc = nrd::GetInstanceDesc(*m_instance);
+    const nrd::InstanceDesc& instanceDesc = *nrd::GetInstanceDesc(*m_instance);
 
     for (uint32_t dispatchIndex = 0; dispatchIndex < dispatchDescNum; dispatchIndex++)
     {
@@ -394,26 +432,22 @@ void NrdIntegration::RunDenoiserPasses(
         if (dispatchDesc.name)
             commandList->beginMarker(dispatchDesc.name);
 
-        assert(m_constantBuffer);
-        commandList->writeBuffer(m_constantBuffer, dispatchDesc.constantBufferData, dispatchDesc.constantBufferDataSize);
-
-        nvrhi::BindingSetDesc setDesc;
-        setDesc.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(instanceDesc.constantBufferRegisterIndex, m_constantBuffer));
-
-        for (uint32_t samplerIndex = 0; samplerIndex < instanceDesc.samplersNum; samplerIndex++)
+        if (dispatchDesc.constantBufferDataSize > 0)
         {
-            assert(m_samplers[samplerIndex]);
-            setDesc.bindings.push_back(nvrhi::BindingSetItem::Sampler(instanceDesc.samplersBaseRegisterIndex + samplerIndex, m_samplers[samplerIndex]));
+            assert(m_constantBuffer);
+            commandList->writeBuffer(m_constantBuffer, dispatchDesc.constantBufferData, dispatchDesc.constantBufferDataSize);
         }
 
         const nrd::PipelineDesc& nrdPipelineDesc = instanceDesc.pipelines[dispatchDesc.pipelineIndex];
+
+        nvrhi::BindingSetDesc setDesc;
         uint32_t resourceIndex = 0;
 
-        for (uint32_t descriptorRangeIndex = 0; descriptorRangeIndex < nrdPipelineDesc.resourceRangesNum; descriptorRangeIndex++)
+        for (uint32_t rangeIndex = 0; rangeIndex < nrdPipelineDesc.resourceRangesNum; rangeIndex++)
         {
-            const nrd::ResourceRangeDesc& nrdDescriptorRange = nrdPipelineDesc.resourceRanges[descriptorRangeIndex];
+            const nrd::ResourceRangeDesc& range = nrdPipelineDesc.resourceRanges[rangeIndex];
 
-            for (uint32_t descriptorOffset = 0; descriptorOffset < nrdDescriptorRange.descriptorsNum; descriptorOffset++)
+            for (uint32_t descriptorOffset = 0; descriptorOffset < range.descriptorsNum; descriptorOffset++)
             {
                 assert(resourceIndex < dispatchDesc.resourcesNum);
                 const nrd::ResourceDesc& resource = dispatchDesc.resources[resourceIndex];
@@ -455,14 +489,12 @@ void NrdIntegration::RunDenoiserPasses(
 
                 assert(texture);
 
-                nvrhi::TextureSubresourceSet subresources = nvrhi::AllSubresources;
-                nvrhi::BindingSetItem setItem = nvrhi::BindingSetItem::None();
-                setItem.resourceHandle = texture;
-                setItem.slot = nrdDescriptorRange.baseRegisterIndex + descriptorOffset;
-                setItem.subresources = subresources;
-                setItem.type = (nrdDescriptorRange.descriptorType == nrd::DescriptorType::TEXTURE) ? nvrhi::ResourceType::Texture_SRV : nvrhi::ResourceType::Texture_UAV;
+                const uint32_t slot = instanceDesc.resourcesBaseRegisterIndex + descriptorOffset;
 
-                setDesc.bindings.push_back(setItem);
+                if (range.descriptorType == nrd::DescriptorType::TEXTURE)
+                    setDesc.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(slot, texture));
+                else
+                    setDesc.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(slot, texture));
 
                 resourceIndex++;
             }
@@ -475,7 +507,7 @@ void NrdIntegration::RunDenoiserPasses(
         nvrhi::BindingSetHandle bindingSet = m_bindingCache.GetOrCreateBindingSet(setDesc, pipeline.bindingLayout);
 
         nvrhi::ComputeState state;
-        state.bindings = { bindingSet };
+        state.bindings = { bindingSet, m_sharedBindingSet };
         state.pipeline = pipeline.pipeline;
         commandList->setComputeState(state);
 
